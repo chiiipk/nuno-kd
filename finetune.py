@@ -52,8 +52,8 @@ from nnm_module import (
     layer_weight,
     select_mid_layers,
     build_teacher_centroids,
-    compute_nnm_loss,
 )
+from nnm_variants import compute_variant_loss
 
 torch.set_num_threads(4)
 
@@ -65,7 +65,7 @@ def get_teacher_model(args, device):
     else:
         config.is_model_parallel = False
         try:
-            model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.float16)
+            model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.bfloat16)
         except:
             model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.float32)
             model = model.half()
@@ -174,11 +174,7 @@ def pt_loss(args, model, model_batch, no_model_batch):
     return lm_loss
 
 
-def get_distil_loss(args, tokenizer, model, teacher_model, model_batch, no_model_batch, logits, epoch):
-    with torch.no_grad():
-        teacher_model.eval()
-        teacher_outputs = teacher_model(**model_batch, use_cache=False)
-        teacher_logits = teacher_outputs.logits
+def get_distil_loss(args, teacher_logits, no_model_batch, logits, epoch):
     if args.model_parallel:
         raise NotImplementedError
     else:
@@ -270,6 +266,34 @@ def get_unwrapped_student(model):
     return m
 
 
+# ═══════════════════════════════════════════════════════════════
+#  NNM: warmup + linear ramp schedule
+# ═══════════════════════════════════════════════════════════════
+
+def _nnm_effective_ratio(global_step, args):
+    """
+    Return the NNM loss weight at this global_step.
+
+      step <  nnm_warmup_steps                       → 0.0           (skip entirely)
+      nnm_warmup_steps <= step < warmup + ramp       → linear ramp 0 → nnm_ratio
+      step >= warmup + ramp                          → nnm_ratio
+
+    If nnm_ramp_steps == 0, the transition is a hard step.
+    """
+    warmup = getattr(args, "nnm_warmup_steps", 0)
+    ramp   = getattr(args, "nnm_ramp_steps", 0)
+    target = args.nnm_ratio
+
+    if global_step < warmup:
+        return 0.0
+    if ramp <= 0:
+        return target
+    progress = (global_step - warmup) / ramp
+    if progress >= 1.0:
+        return target
+    return target * progress
+
+
 def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, optimizer: AdamW, lr_scheduler, dataset, device, teacher_model=None,
              nnm_state=None):
     print_rank("Start Fine-tuning")
@@ -302,10 +326,28 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
     prev_avg_loss = evaluate(args, tokenizer, model, dataset["dev"], "dev", 0, device, adaptive_threshold)
     replay_buffer = ReplayBuffer(args)
 
+    student_captured_hidden = []
+    hook_handles = []
+    def capture_hook_fn(module, input, output):
+        if module.training: 
+            if isinstance(output, tuple):
+                student_captured_hidden.append(output[0])
+            else:
+                student_captured_hidden.append(output)
+
+    for layer in model.base_model.model.model.layers:
+        h_layer = layer.register_forward_hook(capture_hook_fn)
+        hook_handles.append(h_layer)
+
     total_res = []
 
-    # ═══ NNM: enable flag ═══
-    use_nnm = (nnm_state is not None) and (args.nnm_ratio > 0)
+    # ═══ NNM: master switch (config-level) ═══
+    nnm_enabled = (nnm_state is not None) and (args.nnm_ratio > 0)
+    if nnm_enabled:
+        warmup_s = getattr(args, "nnm_warmup_steps", 0)
+        ramp_s   = getattr(args, "nnm_ramp_steps", 0)
+        print_rank(f"[NNM] schedule: warmup={warmup_s} steps, "
+                   f"ramp={ramp_s} steps, target_ratio={args.nnm_ratio}")
 
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
@@ -313,7 +355,9 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
         model.train()
         for it, (model_batch, no_model_batch, gen_data) in enumerate(train_dataloader):
             dataset["train"].move_to_device(model_batch, no_model_batch, gen_data, device)
-
+            student_captured_hidden.clear()
+            student_captured_hidden.append(None)
+            
             if args.lm_data_dir is not None:
                 try:
                     pt_model_batch, pt_no_model_batch, pt_gen_data = next(pt_train_iter)
@@ -341,7 +385,12 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
 
                 # data generation
                 if args.student_gen:
-                    r = np.random.uniform(0, 1)
+                    r_tensor = torch.zeros(1, device=device)
+                    if dist.get_rank() == 0:
+                        r_tensor.uniform_(0, 1)
+                    dist.broadcast(r_tensor, src=0)
+                    r = r_tensor.item()
+                    
                     if "mixed" in args.type and r < args.mixed_alpha:
                         model_batch = student_generator.run_sample(model, gen_data)
                         no_model_batch["label"] = model_batch.pop("no_model_batch")
@@ -366,13 +415,17 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
 
                     model.train()
 
-            # ═══ NNM: turn on hidden states if needed ═══
-            if use_nnm:
-                outputs = model(**model_batch, output_hidden_states=True, use_cache=False)
-                s_hidden = outputs.hidden_states
+            # ═══ NNM: compute effective ratio for this step ═══
+            if nnm_enabled:
+                nnm_eff_ratio = _nnm_effective_ratio(global_step, args)
             else:
-                outputs = model(**model_batch, use_cache=False)
-                s_hidden = None
+                nnm_eff_ratio = 0.0
+            use_nnm = nnm_eff_ratio > 0.0
+
+            # ═══ NNM: turn on hidden states if needed ═══
+            outputs = model(**model_batch, output_hidden_states=True, use_cache=False)
+            s_hidden = student_captured_hidden
+            
 
             logits = outputs.logits
             if args.model_parallel:
@@ -381,27 +434,30 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                 lm_loss = loss_func(logits.float().view(-1, logits.shape[-1]), no_model_batch["label"].view(-1))
 
             if teacher_model is not None:
-                distil_loss = get_distil_loss(args, tokenizer, model, teacher_model, model_batch, no_model_batch, logits, epoch)
+                with torch.no_grad():
+                    teacher_model.eval()
+                    teacher_outputs = teacher_model(**model_batch, output_hidden_states=True, use_cache=False)
+                    teacher_logits = teacher_outputs.logits
+                distil_loss = get_distil_loss(args, teacher_logits, no_model_batch, logits, epoch)
                 loss = (1 - args.kd_ratio) * lm_loss + args.kd_ratio * distil_loss
             else:
                 loss = lm_loss
 
             # ═══════════════════════════════════════════════════════════════
-            #  NNM loss
+            #  NNM loss (warmup-aware)
             # ═══════════════════════════════════════════════════════════════
             nnm_loss = torch.tensor(0.0, device=device)
             if use_nnm:
-                # Teacher forward (output_hidden_states)
-                with torch.no_grad():
-                    teacher_model.eval()
-                    t_out = teacher_model(**model_batch,
-                                          output_hidden_states=True,
-                                          use_cache=False)
-                    t_hidden = t_out.hidden_states
+                t_hidden = teacher_outputs.hidden_states
 
                 student_unwrapped = get_unwrapped_student(model)
-                nnm_loss = compute_nnm_loss(
-                    projectors=student_unwrapped.projectors,
+                nnm_loss = compute_variant_loss(
+                    variant=args.loss_variant,
+                    projectors=getattr(
+                        student_unwrapped,
+                        "projectors",
+                        [None] * len(nnm_state["s_mid"]),
+                    ),
                     s_hidden_states=s_hidden,
                     t_hidden_states=t_hidden,
                     labels=no_model_batch["label"],
@@ -412,7 +468,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                     layer_weights=nnm_state["layer_weights"],
                     ns_iters=args.nnm_ns_iters,
                 )
-                loss = loss + args.nnm_ratio * nnm_loss
+                loss = loss + nnm_eff_ratio * nnm_loss
 
             if args.lm_data_dir is not None:
                 assert args.lm_coef is not None
@@ -502,7 +558,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                 curr_avg_loss = evaluate(args, tokenizer, model, dataset["dev"], "dev", epoch, device, adaptive_threshold)
                 if "adaptive" in args.type:
                     if curr_avg_loss >= prev_avg_loss + args.loss_eps:
-                        adaptive_threshold += 0.1
+                        adaptive_threshold += args.delta_threshold
                         adaptive_threshold = min(adaptive_threshold, 1.0)
                         prev_avg_loss = curr_avg_loss
                 # total_res.append([step]+cur_res)
@@ -627,11 +683,21 @@ def prepare_nnm(args, tokenizer, raw_student, teacher_model, dataset, device):
     """
     Run BEFORE deepspeed.initialize. Returns a dict carrying all NNM state.
 
+    Multi-GPU strategy (rank-0-only pre-pass + broadcast):
+      - Every rank picks the same s_mid/t_mid (deterministic).
+      - Every rank attaches identical projectors (seeded init), since they
+        must exist in the model BEFORE deepspeed.initialize wraps it.
+      - Only rank 0 runs the teacher centroid pre-pass; the centroids and R
+        are then broadcast to all other ranks via torch.distributed.
+      - We assume `dist` is already initialized by the time this is called
+        (i.e. after `initialize(args)` in main()).
+
     Steps:
       1) probe d_s, d_t and choose layer mappings
       2) attach projectors to the raw student so they get wrapped by DeepSpeed
-      3) run teacher centroid pre-pass on a plain dataloader (no DeepSpeed)
-      4) build random projection R and per-layer weights
+      3) (rank 0) build teacher centroids + R; (other ranks) wait
+      4) broadcast centroids + R to all ranks
+      5) build per-layer weights
     """
     # ── 1. shapes & layer selection ────────────────────────────
     s_cfg = raw_student.config
@@ -650,49 +716,107 @@ def prepare_nnm(args, tokenizer, raw_student, teacher_model, dataset, device):
     print_rank(f"[NNM] student layers ({n_s_layers}): selected {s_mid}")
     print_rank(f"[NNM] teacher layers ({n_t_layers}): selected {t_mid}")
 
+    # RPT compares token Gram matrices, so hidden widths may differ and no
+    # projector, random projection, or teacher-centroid pre-pass is needed.
+    if args.loss_variant == "rpt":
+        layer_weights = {
+            s_lid: layer_weight(s_lid, n_s_layers) for s_lid in s_mid
+        }
+        print_rank("[RPT] projector-free setup; skipping centroid pre-pass")
+        return {
+            "s_mid": s_mid,
+            "t_mid": t_mid,
+            "t_centroids": {},
+            "R": None,
+            "layer_weights": layer_weights,
+            "d_s": d_s,
+            "d_t": d_t,
+        }
+
     # ── 2. attach projectors (BEFORE deepspeed wraps the model) ─
+    # Same seed across ranks → identical projector init → no DDP all-reduce
+    # surprises later. Use a dedicated seed offset so we don't collide with
+    # whatever args.seed is doing elsewhere.
     proj_dtype = next(raw_student.parameters()).dtype
-    attach_nnm_projectors(raw_student, n_s_layers, d_s, d_t, s_mid,
-                          device=device, dtype=proj_dtype)
+    g = torch.Generator(device="cpu").manual_seed(args.seed + 1)
+    projectors = nn.ModuleList([nn.Linear(d_s, d_t, bias=False) for _ in s_mid])
+    with torch.no_grad():
+        for p in projectors:
+            p.weight.copy_(torch.randn(d_t, d_s, generator=g) * 0.02)
+    projectors = projectors.to(device=device, dtype=proj_dtype)
+    raw_student.projectors = projectors
+    print_rank(f"[NNM] attached {len(projectors)} projectors "
+               f"({d_s} -> {d_t}) to student")
 
-    # ── 3. build teacher centroids on a plain dataloader ───────
-    sampler = DistributedSampler(dataset["train"], shuffle=True, drop_last=True,
-                                 rank=dist.get_rank(),
-                                 num_replicas=dist.get_world_size())
-    loader = DataLoader(dataset["train"], sampler=sampler,
-                        batch_size=args.batch_size,
-                        num_workers=args.num_workers,
-                        collate_fn=dataset["train"].collate)
+    # ── 3. rank-0 builds centroids + R; other ranks prepare empty tensors ──
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    world = dist.get_world_size() if dist.is_initialized() else 1
 
-    # The collator returns (model_batch, no_model_batch, gen_data). We need a
-    # plain dict with input_ids / attention_mask / labels for the centroid
-    # routine, so wrap with a tiny generator.
-    def _flatten_batches(it):
-        for model_batch, no_model_batch, _gen in it:
-            yield {
-                "input_ids":      model_batch["input_ids"],
-                "attention_mask": model_batch.get("attention_mask",
-                                                  torch.ones_like(model_batch["input_ids"])),
-                "labels":         no_model_batch["label"],
-            }
+    # Allocate placeholder centroid tensors on EVERY rank — rank 0 fills with
+    # real values, others receive via broadcast. Same shape on all ranks so
+    # broadcast just works.
+    t_centroids = {
+        s_lid: torch.zeros(args.nnm_K, d_t, device=device, dtype=torch.float32)
+        for s_lid in s_mid
+    }
+    R = torch.zeros(d_t, args.nnm_d_prime, device=device, dtype=torch.float32)
 
-    teacher_device = next(teacher_model.parameters()).device
-    t_centroids = build_teacher_centroids(
-        teacher=teacher_model,
-        dataloader=_flatten_batches(loader),
-        student_layer_mapping=s_mid,
-        teacher_layer_mapping=t_mid,
-        K=args.nnm_K,
-        eta=args.nnm_eta,
-        T_dead=args.nnm_T_dead,
-        max_batches=args.nnm_centroid_batches,
-        device=teacher_device,
-    )
-    # Move centroids to the student device (where NNM loss is computed)
-    t_centroids = {k: v.to(device) for k, v in t_centroids.items()}
+    if rank == 0:
+        # Plain loader — NO DistributedSampler, since only this rank reads.
+        # drop_last=True keeps shapes uniform for the centroid update.
+        loader = DataLoader(dataset["train"], shuffle=True, drop_last=True,
+                            batch_size=args.batch_size,
+                            num_workers=args.num_workers,
+                            collate_fn=dataset["train"].collate)
 
-    # ── 4. random projection R and layer weights ───────────────
-    R = make_R(d_t, args.nnm_d_prime, device=device, seed=args.seed)
+        # The collator returns (model_batch, no_model_batch, gen_data). We
+        # need a plain dict with input_ids / attention_mask / labels for the
+        # centroid routine, so wrap with a tiny generator.
+        def _flatten_batches(it):
+            for model_batch, no_model_batch, _gen in it:
+                yield {
+                    "input_ids":      model_batch["input_ids"],
+                    "attention_mask": model_batch.get(
+                        "attention_mask",
+                        torch.ones_like(model_batch["input_ids"]),
+                    ),
+                    "labels":         no_model_batch["label"],
+                }
+
+        teacher_device = next(teacher_model.parameters()).device
+        rank0_centroids = build_teacher_centroids(
+            teacher=teacher_model,
+            dataloader=_flatten_batches(loader),
+            student_layer_mapping=s_mid,
+            teacher_layer_mapping=t_mid,
+            K=args.nnm_K,
+            eta=args.nnm_eta,
+            T_dead=args.nnm_T_dead,
+            max_batches=args.nnm_centroid_batches,
+            device=teacher_device,
+        )
+        # Fill the pre-allocated tensors (in-place keeps the same storage so
+        # broadcast hits the right buffer).
+        for s_lid in s_mid:
+            t_centroids[s_lid].copy_(rank0_centroids[s_lid].to(device).float())
+
+        # Build R on rank 0 (deterministic, but we still broadcast to be safe)
+        rank0_R = make_R(d_t, args.nnm_d_prime, device=device, seed=args.seed)
+        R.copy_(rank0_R.float())
+        print_rank(f"[NNM] rank 0 finished centroid pre-pass")
+
+    # ── 4. broadcast centroids + R from rank 0 to all ranks ────
+    if world > 1:
+        for s_lid in s_mid:
+            dist.broadcast(t_centroids[s_lid], src=0)
+        dist.broadcast(R, src=0)
+        dist.barrier()
+        print_rank(f"[NNM] broadcast complete across {world} ranks")
+
+    # Cast back to the dtype actually used by NNM loss internals (float32).
+    # `t_centroids` is already float32. `R` too. Done.
+
+    # ── 5. layer weights ───────────────────────────────────────
     layer_weights = {
         s_lid: layer_weight(s_lid, n_s_layers) for s_lid in s_mid
     }
@@ -708,7 +832,6 @@ def prepare_nnm(args, tokenizer, raw_student, teacher_model, dataset, device):
         "d_s":           d_s,
         "d_t":           d_t,
     }
-
 
 def main():
     torch.backends.cudnn.enabled = False

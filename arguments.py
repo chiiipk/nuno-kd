@@ -15,6 +15,8 @@
 
 import argparse
 import os
+
+from celery import group
 import deepspeed
 import numpy as np
 
@@ -191,6 +193,8 @@ def add_distillm_args(parser: argparse.ArgumentParser):
     group.add_argument("--capacity", type=int, default=1000)
     group.add_argument("--replay-ratio", type=str, default="decreasing")
     # group.add_argument("--time", action="store_true")
+
+    group.add_argument("--delta-threshold", type=float, default=0.1)
     return parser
 
 
@@ -276,6 +280,25 @@ def add_nnm_args(parser: argparse.ArgumentParser):
                        help="Random projection target dimension.")
     group.add_argument("--nnm-ns-iters", type=int, default=5,
                        help="Newton-Schulz iterations for polar factor.")
+
+    # warmup + ramp schedule
+    group.add_argument("--nnm-warmup-steps", type=int, default=0,
+                       help="Number of global steps to skip NNM at the start "
+                            "of training (NNM loss = 0). Saves compute and "
+                            "lets the student stabilize LM/KD loss first.")
+    group.add_argument("--nnm-ramp-steps", type=int, default=0,
+                       help="After warmup, linearly ramp nnm_ratio from 0 to "
+                            "its target over this many steps. 0 = hard step.")
+    group.add_argument(
+        "--loss-variant", type=str, default="nnm",
+        choices=["nnm", "nuno", "bnm", "bnmm", "erank", "rpt"],
+        help="Which structural loss to use as the regularizer. "
+             "nnm/nuno = centroid-anchored log-squared match (ours); "
+             "bnm = maximize ||H_s||_*; "
+             "bnmm = match raw ||H_s||_* to ||H_t||_*; "
+             "erank = maximize effective rank of H_s; "
+             "rpt = projector-free normalized rank-profile Wasserstein loss.",
+    )
 
     return parser
 

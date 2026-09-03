@@ -375,3 +375,21 @@ def amid(logits, teacher_logits, no_model_batch, args, **kwargs):
 
     else:
         exit("Check div_name")
+
+def csd(logits, teacher_logits, no_model_batch, mode="SS"):
+    student_probs = F.softmax(logits, dim=-1)
+    teacher_probs = F.softmax(teacher_logits, dim=-1)
+    if mode == "SS":
+        loss = (logits - teacher_logits - torch.sum(student_probs * (logits - teacher_logits), \
+            dim=-1,keepdim=True)).detach() * student_probs.detach() * logits
+    elif mode == "TS":
+        loss1 = (logits - teacher_logits - torch.sum(teacher_probs * (logits - teacher_logits), \
+            dim=-1,keepdim=True)).detach() * student_probs.detach() * logits
+        loss2 = (logits - teacher_logits - torch.sum(student_probs * (logits - teacher_logits), \
+            dim=-1,keepdim=True)).detach() * teacher_probs * logits
+        loss = (loss1 + loss2) / 2
+        
+    x = torch.sum(loss, dim=-1).view(-1) ## summation over vocab
+    mask = (no_model_batch["label"] != -100).int()
+    distil_loss = torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
+    return distil_loss

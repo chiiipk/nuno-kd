@@ -17,10 +17,16 @@ dependencies = [
     "deepspeed",
     "nltk",
     "numerize",
-    "torch==2.9.1",
+    "torch==2.10.0",
     "rouge-score",
     "rich",
-    "setuptools"
+    "setuptools",
+    "vllm==0.17.1",
+    "lm-eval[math,ifeval]==0.4.12",
+    "langdetect",
+    "immutabledict",
+    "celery",
+    "matplotlib"
 ]
 
 [tool.uv]

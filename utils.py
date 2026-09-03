@@ -181,16 +181,17 @@ def get_model(args, device):
     
     return model
 
-
 def get_optimizer_params(args, model: nn.Module):
     # taken from https://github.com/facebookresearch/SpanBERT/blob/0670d8b6a38f6714b85ea7a033f16bd8cc162676/code/run_tacred.py
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'ln_f.weight', 'ln_1.weight', 'ln_2.weight', 'ln_cross_attn']
+    projector_param = ['projectors', 'projector']
+
     optimizer_grouped_parameters = [
         {'params': [p for n, p in param_optimizer
-                    if not any(nd in n for nd in no_decay)]},
+                    if not any(nd in n for nd in no_decay) and not any(nd in n for nd in projector_param)]},
         {'params': [p for n, p in param_optimizer
-                    if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+                    if any(nd in n for nd in no_decay) and not any(nd in n for nd in projector_param)], 'weight_decay': 0.0},
     ]
 
     return optimizer_grouped_parameters
@@ -199,8 +200,9 @@ def get_optimizer_params(args, model: nn.Module):
 def get_optimizer_params_peft(args, model: nn.Module):
     # taken from https://github.com/facebookresearch/SpanBERT/blob/0670d8b6a38f6714b85ea7a033f16bd8cc162676/code/run_tacred.py
     param_optimizer = list(model.named_parameters())
+    projector_param = ['projectors', 'projector']
     optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if p.requires_grad]},
+        {'params': [p for n, p in param_optimizer if p.requires_grad and not any(nd in n for nd in projector_param)]},
     ]
 
     return optimizer_grouped_parameters
