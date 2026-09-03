@@ -23,6 +23,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from utils import print_rank, save_rank
+from .path_utils import dataset_file_prefix
 
 
 dtypes = {
@@ -87,8 +88,10 @@ class DistributedMMapIndexedDataset(torch.utils.data.Dataset):
                                           offset=offset + self._sizes.nbytes + self._pointers.nbytes)
 
         def __del__(self):
-            self._bin_buffer_mmap._mmap.close()
-            del self._bin_buffer_mmap
+            mmap = getattr(self, '_bin_buffer_mmap', None)
+            if mmap is not None:
+                mmap._mmap.close()
+                del self._bin_buffer_mmap
 
         @property
         def dtype(self):
@@ -136,7 +139,7 @@ class DistributedMMapIndexedDataset(torch.utils.data.Dataset):
         state = 0
         history = {-1:(0, 0)}
         for state in range(np.iinfo(np.int32).max):
-            source_file = path + name + f"_{state}"
+            source_file = dataset_file_prefix(path, name, state)
             if self.exists(source_file):
                 index = self.Index(index_file_path(source_file))
                 history[state] = (history[state-1][1], history[state-1][1] + len(index))
@@ -148,7 +151,7 @@ class DistributedMMapIndexedDataset(torch.utils.data.Dataset):
         return state, history
 
     def __getstate__(self):
-        return self._path + self._name + "_%d"%(self._state)
+        return dataset_file_prefix(self._path, self._name, self._state)
 
     def __setstate__(self, state):
         self._state = state
@@ -163,7 +166,7 @@ class DistributedMMapIndexedDataset(torch.utils.data.Dataset):
 
         self._state = state
 
-        source_file = path + name + f"_{self._state}"
+        source_file = dataset_file_prefix(path, name, self._state)
         self._index = self.Index(index_file_path(source_file))
         self._bin_buffer_mmap = np.memmap(data_file_path(source_file), mode='r', order='C')
         self._bin_buffer = memoryview(self._bin_buffer_mmap)

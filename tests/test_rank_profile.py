@@ -2,12 +2,23 @@ import unittest
 
 import torch
 
+from data_utils.path_utils import dataset_file_prefix
 from nnm_module import compute_nnm_loss
 from nnm_variants import compute_variant_loss
 from rank_profile import rank_profile, rank_profile_loss_one_layer
 
 
 class RankProfileTest(unittest.TestCase):
+    def test_dataset_path_does_not_require_trailing_slash(self):
+        self.assertEqual(
+            dataset_file_prefix("/tmp/processed/model", "train", 0),
+            "/tmp/processed/model/train_0",
+        )
+        self.assertEqual(
+            dataset_file_prefix("/tmp/processed/model/", "train", 0),
+            "/tmp/processed/model/train_0",
+        )
+
     def test_translation_scale_and_orthogonal_invariance(self):
         torch.manual_seed(0)
         hidden = torch.randn(9, 5)
