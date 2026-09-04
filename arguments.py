@@ -323,6 +323,8 @@ def add_nnm_args(parser: argparse.ArgumentParser):
     group.add_argument("--cst-fixed-gamma-grid", type=str, default=None,
                        help="Comma-separated positive gamma grid for debug/eval.")
     group.add_argument("--cst-profile", action="store_true")
+    group.add_argument("--rpt-max-tokens", type=int, default=64,
+                       help="Maximum shared response-token subset used by RPT.")
 
     return parser
 

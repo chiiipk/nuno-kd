@@ -6,7 +6,11 @@ import torch
 from data_utils.path_utils import dataset_file_prefix
 from nnm_module import compute_nnm_loss, layer_weight, select_mid_layers
 from nnm_variants import compute_variant_loss
-from rank_profile import rank_profile, rank_profile_loss_one_layer
+from rank_profile import (
+    compute_rank_profile_loss,
+    rank_profile,
+    rank_profile_loss_one_layer,
+)
 from model_structure import resolve_transformer_layers
 
 
@@ -98,6 +102,38 @@ class RankProfileTest(unittest.TestCase):
         )
         loss.backward()
         self.assertTrue(torch.isfinite(student.grad).all())
+
+    def test_rpt_caps_shared_response_tokens_and_allows_different_widths(self):
+        torch.manual_seed(3)
+        student = (
+            torch.randn(2, 100, 7, requires_grad=True),
+            torch.randn(2, 100, 7, requires_grad=True),
+        )
+        teacher = (torch.randn(2, 100, 13), torch.randn(2, 100, 13))
+        labels = torch.ones(2, 100, dtype=torch.long)
+        loss = compute_rank_profile_loss(
+            student,
+            teacher,
+            labels,
+            student_layer_mapping=[0, 1],
+            teacher_layer_mapping=[0, 1],
+            max_tokens=64,
+        )
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(torch.isfinite(student[0].grad).all())
+        self.assertTrue(torch.isfinite(student[1].grad).all())
+
+    def test_rpt_rejects_invalid_token_cap(self):
+        with self.assertRaisesRegex(ValueError, "at least 2"):
+            compute_rank_profile_loss(
+                (torch.randn(1, 3, 2),),
+                (torch.randn(1, 3, 4),),
+                torch.ones(1, 3, dtype=torch.long),
+                [0],
+                [0],
+                max_tokens=1,
+            )
 
 
 if __name__ == "__main__":

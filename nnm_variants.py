@@ -31,7 +31,7 @@ from nnm_module import (
     newton_schulz_polar,
     nuclear_norm_ns,
 )
-from rank_profile import rank_profile_loss_one_layer
+from rank_profile import rank_profile_loss_one_layer, compute_rank_profile_loss
 from cst_module import compute_cst_loss
 
 
@@ -203,6 +203,7 @@ def compute_variant_loss(
     layer_weights,
     ns_iters=5,
     cst_options=None,
+    rpt_options=None,
 ):
     """
     Drop-in replacement for nnm_module.compute_nnm_loss. Identical signature,
@@ -216,6 +217,12 @@ def compute_variant_loss(
             s_hidden_states, t_hidden_states, labels,
             student_layer_mapping, teacher_layer_mapping,
             **(cst_options or {}),
+        )
+    if variant == "rpt":
+        return compute_rank_profile_loss(
+            s_hidden_states, t_hidden_states, labels,
+            student_layer_mapping, teacher_layer_mapping,
+            **(rpt_options or {}),
         )
     if n_layers == 0:
         return total_loss

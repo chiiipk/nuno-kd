@@ -537,6 +537,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                         ),
                         "profile": args.cst_profile,
                     },
+                    rpt_options={"max_tokens": args.rpt_max_tokens},
                 )
                 if args.loss_variant == "cst":
                     nnm_loss, cst_diagnostics = variant_result
