@@ -85,7 +85,15 @@ def get_teacher_model(args, device):
             )
         else:
             try:
-                model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.bfloat16)
+                teacher_dtype = (
+                    torch.float16 if args.teacher_model_fp16 else torch.bfloat16
+                )
+                model = AutoModelForCausalLM.from_pretrained(
+                    args.teacher_model_path,
+                    config=config,
+                    device_map={"": device},
+                    torch_dtype=teacher_dtype,
+                )
             except Exception:
                 model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.float32)
                 model = model.half()
