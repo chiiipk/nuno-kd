@@ -18,4 +18,5 @@ Vietnamese technical proposal:
 
 ```bash
 tectonic propose.tex
+# hoặc: pdflatex propose.tex
 ```

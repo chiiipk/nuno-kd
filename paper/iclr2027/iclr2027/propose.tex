@@ -2,7 +2,16 @@
 \usepackage{iclr2027_conference,times}
 \input{math_commands.tex}
 \usepackage{amsmath,amssymb,booktabs,microtype,array}
-\usepackage{fontspec}
+\usepackage{iftex}
+\ifPDFTeX
+  % pdfLaTeX cần encoding T5 để hiển thị đầy đủ dấu tiếng Việt.
+  \usepackage[utf8]{inputenc}
+  \usepackage[T5]{fontenc}
+  \usepackage[vietnamese,english]{babel}
+\else
+  % XeLaTeX/LuaLaTeX đọc Unicode trực tiếp.
+  \usepackage{fontspec}
+\fi
 \usepackage{hyperref}
 \usepackage{url}
 
@@ -189,8 +198,8 @@ khác biệt bắt đầu rõ ở
 \end{equation}
 đại lượng đo mức tập trung phổ.  Với ví dụ trên, giá trị này lần lượt là 0.5 và
 0.82.  Scale lớn hơn tiếp tục cung cấp thông tin về các moment bậc cao và số
-hướng hoạt động.  Vì vậy một $gamma$ duy nhất có thể chỉ nhìn thấy một phần
-hình học; nhiều $gamma$ mô tả cả một đường cong đặc trưng.
+hướng hoạt động.  Vì vậy một $\gamma$ duy nhất có thể chỉ nhìn thấy một phần
+hình học; nhiều $\gamma$ mô tả cả một đường cong đặc trưng.
 
 \subsection{Tính đặc trưng của transform}
 
@@ -200,7 +209,7 @@ hình học; nhiều $gamma$ mô tả cả một đường cong đặc trưng.
  \label{eq:derivative}
 \end{equation}
 Vế phải là một hàm hữu tỉ; các pole tại $-1/p_i$ xác định các trị riêng dương.
-Do đó, với phổ hữu hạn, nếu hai transform bằng nhau trên một khoảng $gamma$
+Do đó, với phổ hữu hạn, nếu hai transform bằng nhau trên một khoảng $\gamma$
 mở thì hai normalized spectrum bằng nhau, kể cả multiplicity.  Trong train ta
 không quan sát cả khoảng liên tục mà dùng Monte Carlo tại các scale mới qua mỗi
 step.
@@ -213,7 +222,7 @@ Lấy log-uniform để mọi bậc độ lớn có xác suất như nhau:
  \gamma_j&=\exp(u_j),\qquad j=1,\ldots,q.
  \label{eq:gamma}
 \end{align}
-Student và teacher bắt buộc dùng cùng $\gamma_j$.  Loss tại cặp layer $ell$:
+Student và teacher bắt buộc dùng cùng $\gamma_j$.  Loss tại cặp layer $\ell$:
 \begin{equation}
  \mathcal L_{\cst}^{(\ell)}
  =\frac1q\sum_{j=1}^{q}
