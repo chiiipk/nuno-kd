@@ -3,12 +3,16 @@ import unittest
 import torch
 
 from data_utils.path_utils import dataset_file_prefix
-from nnm_module import compute_nnm_loss
+from nnm_module import compute_nnm_loss, layer_weight, select_mid_layers
 from nnm_variants import compute_variant_loss
 from rank_profile import rank_profile, rank_profile_loss_one_layer
 
 
 class RankProfileTest(unittest.TestCase):
+    def test_paper_layer_configuration(self):
+        self.assertEqual(select_mid_layers(28, 4), [5, 11, 17, 23])
+        self.assertEqual(layer_weight(11, 28), 1.0)
+
     def test_dataset_path_does_not_require_trailing_slash(self):
         self.assertEqual(
             dataset_file_prefix("/tmp/processed/model", "train", 0),

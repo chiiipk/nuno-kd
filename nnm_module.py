@@ -111,14 +111,14 @@ def make_R(d: int, d_prime: int, device, seed: int = 42) -> torch.Tensor:
 
 
 def layer_weight(l: int, L: int, sigma: float = 0.15) -> float:
-    # return math.exp(-((l / L - 0.5) ** 2) / (2 * sigma ** 2))
-    return 0.3
+    # Eq. (10) in the paper averages all selected layers uniformly.
+    return 1.0
 
 
 def select_mid_layers(n_layers: int, n_mid: int = 4) -> list:
-    """30-85% range, dedup."""
+    """Select uniformly spaced layers from the paper's 20-85% range."""
     import numpy as np
-    lo = max(1, int(0.3 * n_layers))
+    lo = max(1, int(0.2 * n_layers))
     hi = min(n_layers, int(0.85 * n_layers))
     if lo >= hi:
         lo = max(0, hi - n_mid)

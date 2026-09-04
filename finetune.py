@@ -23,7 +23,12 @@ from transformers import (
     AutoConfig,
     GenerationConfig)
 
-from transformers import get_constant_schedule_with_warmup, get_polynomial_decay_schedule_with_warmup
+from transformers import (
+    BitsAndBytesConfig,
+    get_constant_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
+    get_polynomial_decay_schedule_with_warmup,
+)
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from arguments import get_args
@@ -64,11 +69,26 @@ def get_teacher_model(args, device):
         raise NotImplementedError
     else:
         config.is_model_parallel = False
-        try:
-            model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.bfloat16)
-        except:
-            model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.float32)
-            model = model.half()
+        if args.teacher_load_in_4bit:
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                args.teacher_model_path,
+                config=config,
+                device_map={"": device},
+                quantization_config=quantization_config,
+                torch_dtype=torch.float16,
+            )
+        else:
+            try:
+                model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.bfloat16)
+            except Exception:
+                model = AutoModelForCausalLM.from_pretrained(args.teacher_model_path, config=config, device_map={"": device}, torch_dtype=torch.float32)
+                model = model.half()
 
         if args.peft is not None and args.teacher_peft_path is not None:
             if args.peft == "lora":
@@ -119,10 +139,17 @@ def get_optimizer(args, model):
 def get_learning_rate_scheduler(args, optimizer):
     if args.total_iters is None:
         args.total_iters = args.train_iters_per_epoch * args.epochs
+    warmup_steps = args.warmup_iters
+    if args.warmup_ratio > 0:
+        warmup_steps = round(args.total_iters * args.warmup_ratio)
     if args.lr_decay_style == "constant":
-        lr_scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_iters)
+        lr_scheduler = get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
     elif args.lr_decay_style == "cosine":
-        lr_scheduler = CosineAnnealingLR(optimizer, T_max=args.total_iters, eta_min=args.lr_min)
+        lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=args.total_iters,
+        )
     elif args.lr_decay_style == "noam":
         lr_scheduler = get_polynomial_decay_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_iters, num_training_steps=args.total_iters, power=0.5)
     else:

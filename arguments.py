@@ -34,6 +34,9 @@ def add_model_args(parser: argparse.ArgumentParser):
     group.add_argument("--teacher-model-path", type=str)
     group.add_argument("--teacher-ckpt-name", type=str)
     group.add_argument("--teacher-model-fp16", action="store_true")
+    group.add_argument("--teacher-load-in-4bit", action="store_true",
+                       help="Load the frozen teacher in 4-bit for low-memory GPUs. "
+                            "This changes numerical precision from the paper setup.")
     group.add_argument("--model-parallel", action="store_true")
     group.add_argument("--model-parallel-size", type=int, default=None)
     group.add_argument("--no-value", action="store_true")
@@ -136,6 +139,8 @@ def add_hp_args(parser: argparse.ArgumentParser):
     group.add_argument('--warmup-iters', type=int, default=0,
                        help='percentage of data to warmup on (.01 = 1% of all '
                             'training iters). Default 0.01')
+    group.add_argument('--warmup-ratio', type=float, default=0.0,
+                       help='Fraction of total optimizer steps used for LR warmup.')
     group.add_argument('--lr-decay-iters', type=int, default=None,
                        help='number of iterations to decay LR over,'
                             ' If None defaults to `--train-iters`*`--epochs`')
