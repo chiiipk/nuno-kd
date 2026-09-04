@@ -13,3 +13,9 @@ pdflatex main.tex
 The current experiment is explicitly labeled preliminary (10K examples) and
 must be replaced or augmented with controlled full-budget runs before
 submission.
+
+Vietnamese technical proposal:
+
+```bash
+tectonic propose.tex
+```

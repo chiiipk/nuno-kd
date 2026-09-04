@@ -1,0 +1,510 @@
+\documentclass{article}
+\usepackage{iclr2027_conference,times}
+\input{math_commands.tex}
+\usepackage{amsmath,amssymb,booktabs,microtype,array}
+\usepackage{fontspec}
+\usepackage{hyperref}
+\usepackage{url}
+
+\title{Đề xuất nghiên cứu: Characteristic Spectral Transform\\
+cho chưng cất tri thức mô hình ngôn ngữ}
+
+\author{Bản đề xuất kỹ thuật bằng tiếng Việt}
+
+% Bật dòng dưới nếu cần bản không ẩn tác giả.
+% \iclrfinalcopy
+
+\newcommand{\cst}{\textsc{CST}}
+\newcommand{\sg}{\operatorname{stopgrad}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Đề xuất này trình bày Characteristic Spectral Transform (\cst), một hàm mất
+mát phụ trợ dùng để truyền hình học biểu diễn từ mô hình giáo viên sang mô hình
+học sinh.  Thay vì ép hai hidden state bằng nhau theo từng tọa độ, học một
+projector đổi chiều, hoặc so trực tiếp các trị riêng, \cst{} mô tả hình học của
+hidden state bằng đường cong
+$\Phi_H(\gamma)=\log\det(I+\gamma G_H)$ tại nhiều giá trị $\gamma>0$.
+$G_H$ là ma trận Gram đã trừ trung bình và chuẩn hóa năng lượng.  Vì vậy, hai
+mô hình có hidden width khác nhau vẫn so sánh được bằng các số vô hướng.
+Trong đường train, log-determinant được tính bằng Cholesky theo batch, không sử
+dụng SVD hay eigendecomposition.  Tài liệu giải thích từng công thức, thuật toán,
+độ phức tạp, cấu hình thực nghiệm và cách diễn giải kết quả ban đầu.
+\end{abstract}
+
+\section{Mục tiêu và câu hỏi nghiên cứu}
+
+Chưng cất tri thức (knowledge distillation, KD) thường yêu cầu mô hình học sinh
+khớp phân phối đầu ra của mô hình giáo viên.  Với một token, nếu $z_s,z_t$ là
+logit của student và teacher, một dạng loss đầu ra là
+\begin{equation}
+ \mathcal L_{\mathrm{KD}}
+ =D\!\left(
+   \operatorname{softmax}(z_s/T),
+   \operatorname{softmax}(z_t/T)
+ \right),
+ \label{eq:output-kd}
+\end{equation}
+trong đó $D$ có thể là KL, skew-KL hoặc một divergence khác và $T$ là nhiệt độ.
+Loss này trả lời câu hỏi ``student có dự đoán giống teacher không?'', nhưng
+không trực tiếp trả lời câu hỏi ``student có tổ chức biểu diễn trung gian giống
+teacher không?''.
+
+Đề xuất đặt ra ba câu hỏi:
+\begin{enumerate}
+ \item Có thể truyền cấu trúc phổ của hidden state mà không cần hai hidden width
+ bằng nhau hay không?
+ \item Có thể tránh projector học được, teacher centroids, SVD và
+ eigendecomposition trong đường train hay không?
+ \item Có thể làm điều đó với overhead đủ nhỏ cho on-policy KD hay không?
+\end{enumerate}
+
+Mục tiêu cuối cùng là
+\begin{equation}
+ \boxed{
+ \mathcal L_{\mathrm{total}}
+ =\mathcal L_{\mathrm{KD}}
+ +\lambda_{\cst}\mathcal L_{\cst}}
+ \label{eq:total}
+\end{equation}
+và giữ nguyên toàn bộ loss KD đầu ra hiện có.
+
+\section{Ký hiệu và dữ liệu đầu vào}
+
+Xét một minibatch sau khi student đã sinh response.  Tại một layer, gom hidden
+state của các response token hợp lệ thành
+\begin{equation}
+ H\in\R^{m\times d}.
+\end{equation}
+Ở đây:
+\begin{itemize}
+ \item $m$ là số token được chọn; cấu hình mặc định là $m\leq64$;
+ \item $d$ là hidden width, ví dụ student và teacher có thể lần lượt là
+ $d_s=1536$ và $d_t=5120$;
+ \item mỗi hàng $H_{i,:}$ là biểu diễn của một token;
+ \item teacher và student dùng đúng cùng vị trí token, nhưng không cần cùng
+ số chiều đặc trưng.
+\end{itemize}
+
+Mask response lấy trực tiếp từ label:
+\begin{equation}
+ \mathcal I=\{i:\texttt{label}_i\neq-100\}.
+\end{equation}
+Nếu $|\mathcal I|>m_{\max}$, ta lấy ngẫu nhiên một tập con một lần trong mỗi
+training step.  Tập chỉ số đó được dùng chung cho mọi layer, student và teacher.
+
+\section{Từ hidden state tới hình học chuẩn hóa}
+
+\subsection{Bước 1: trừ trung bình theo token}
+
+Vector trung bình của layer là
+\begin{equation}
+ \bar h=\frac{1}{m}\sum_{i=1}^{m}H_{i,:}\in\R^d.
+\end{equation}
+Hidden state sau khi center:
+\begin{equation}
+ X=H-\mathbf 1\bar h^\top\in\R^{m\times d}.
+ \label{eq:center}
+\end{equation}
+Thao tác này loại bỏ phép tịnh tiến chung.  Nếu mọi token cùng được cộng một
+vector $b$, tức $H'=H+\mathbf1b^\top$, thì $X'=X$.
+
+\subsection{Bước 2: tính tổng năng lượng}
+
+\begin{equation}
+ e=\lVert X\rVert_F^2
+ =\sum_{i=1}^{m}\sum_{k=1}^{d}X_{ik}^2.
+ \label{eq:energy}
+\end{equation}
+Nếu $e\leq\epsilon$, layer gần như hằng theo token và không chứa hình học đáng
+tin cậy; implementation bỏ qua layer này để tránh chia cho số gần zero.
+
+\subsection{Bước 3: ma trận Gram token}
+
+\begin{equation}
+ G_H=\frac{XX^\top}{e+\epsilon}\in\R^{m\times m}.
+ \label{eq:gram}
+\end{equation}
+Phần tử $(G_H)_{ij}$ đo inner product chuẩn hóa giữa token $i$ và token $j$.
+Ma trận này là positive semidefinite (PSD), và khi $e\gg\epsilon$:
+\begin{equation}
+ \operatorname{Tr}(G_H)
+ =\frac{\operatorname{Tr}(XX^\top)}{e+\epsilon}
+ \approx1.
+\end{equation}
+Do đó $G_H$ giữ lại \emph{cách năng lượng được phân bố giữa các hướng}, nhưng
+loại bỏ độ lớn tổng thể.
+
+Ba bất biến quan trọng là
+\begin{align}
+ G_{H+\mathbf1b^\top}&=G_H &&\text{(tịnh tiến)},\\
+ G_{aH}&=G_H,\quad a\neq0 &&\text{(scale đẳng hướng)},\\
+ G_{HQ}&=G_H,\quad QQ^\top=I &&\text{(xoay hệ tọa độ)}.
+\end{align}
+Đây là lý do \cst{} không cần học ánh xạ tọa độ từ student sang teacher.
+
+\section{Characteristic Spectral Transform}
+
+\subsection{Định nghĩa trung tâm}
+
+Với một scale $\gamma>0$, định nghĩa
+\begin{equation}
+ \boxed{
+ \Phi_H(\gamma)=\log\det(I+\gamma G_H)}.
+ \label{eq:cst}
+\end{equation}
+Vì $G_H\succeq0$, mọi trị riêng của $I+\gamma G_H$ lớn hơn hoặc bằng 1;
+log-determinant vì vậy hữu hạn và không âm.
+
+Nếu chỉ dùng để phân tích, gọi $p_1,\ldots,p_r$ là các trị riêng dương của
+$G_H$.  Khi đó
+\begin{equation}
+ \Phi_H(\gamma)=\sum_{i=1}^{r}\log(1+\gamma p_i).
+ \label{eq:spectrum-view}
+\end{equation}
+Công thức~\ref{eq:spectrum-view} giải thích ý nghĩa phổ, nhưng implementation
+train \textbf{không tính} $p_i$.
+
+\subsection{Tại sao cần nhiều giá trị $\gamma$?}
+
+Giả sử hai phổ đều có tổng bằng 1:
+\begin{align}
+ p^{(A)}&=(0.5,0.5),\\
+ p^{(B)}&=(0.9,0.1).
+\end{align}
+Ở scale nhỏ, khai triển Taylor cho ta
+\begin{equation}
+ \Phi_H(\gamma)
+ =\gamma\operatorname{Tr}(G_H)
+ -\frac{\gamma^2}{2}\operatorname{Tr}(G_H^2)
+ +O(\gamma^3).
+ \label{eq:taylor}
+\end{equation}
+Vì trace gần 1, số hạng bậc nhất của mọi representation gần giống nhau.  Sự
+khác biệt bắt đầu rõ ở
+\begin{equation}
+ \operatorname{Tr}(G_H^2)=\sum_i p_i^2,
+\end{equation}
+đại lượng đo mức tập trung phổ.  Với ví dụ trên, giá trị này lần lượt là 0.5 và
+0.82.  Scale lớn hơn tiếp tục cung cấp thông tin về các moment bậc cao và số
+hướng hoạt động.  Vì vậy một $gamma$ duy nhất có thể chỉ nhìn thấy một phần
+hình học; nhiều $gamma$ mô tả cả một đường cong đặc trưng.
+
+\subsection{Tính đặc trưng của transform}
+
+Đạo hàm theo scale là
+\begin{equation}
+ \Phi'_H(\gamma)=\sum_{i=1}^{r}\frac{p_i}{1+\gamma p_i}.
+ \label{eq:derivative}
+\end{equation}
+Vế phải là một hàm hữu tỉ; các pole tại $-1/p_i$ xác định các trị riêng dương.
+Do đó, với phổ hữu hạn, nếu hai transform bằng nhau trên một khoảng $gamma$
+mở thì hai normalized spectrum bằng nhau, kể cả multiplicity.  Trong train ta
+không quan sát cả khoảng liên tục mà dùng Monte Carlo tại các scale mới qua mỗi
+step.
+
+\section{Loss \cst{} nhiều scale và nhiều layer}
+
+Lấy log-uniform để mọi bậc độ lớn có xác suất như nhau:
+\begin{align}
+ u_j&\sim\mathcal U(\log\gamma_{\min},\log\gamma_{\max}),\\
+ \gamma_j&=\exp(u_j),\qquad j=1,\ldots,q.
+ \label{eq:gamma}
+\end{align}
+Student và teacher bắt buộc dùng cùng $\gamma_j$.  Loss tại cặp layer $ell$:
+\begin{equation}
+ \mathcal L_{\cst}^{(\ell)}
+ =\frac1q\sum_{j=1}^{q}
+ \left(
+  \Phi_{H_s^{(\ell_s)}}(\gamma_j)
+  -\sg\left[\Phi_{H_t^{(\ell_t)}}(\gamma_j)\right]
+ \right)^2.
+ \label{eq:layerloss}
+\end{equation}
+Với $n$ cặp layer:
+\begin{equation}
+ \boxed{
+ \mathcal L_{\cst}=\frac1n\sum_{\ell=1}^{n}
+ \mathcal L_{\cst}^{(\ell)}}.
+ \label{eq:multilayer}
+\end{equation}
+
+Ký hiệu stop-gradient có hai ý nghĩa thực tế: teacher chạy dưới
+\texttt{no\_grad}, và gradient của Equation~\ref{eq:total} chỉ cập nhật
+student.  CST cũng không sinh thêm module nào ở inference.
+
+\section{Tính log-determinant mà không eig/SVD}
+
+\subsection{Chọn không gian determinant nhỏ hơn}
+
+Thông thường $m=64\ll d$, nên dùng Gram token $XX^\top$ kích thước $64\times64$.
+Nếu có trường hợp $d<m$, định lý determinant Sylvester cho phép
+\begin{equation}
+ \det(I_m+\gamma XX^\top/e)
+ =\det(I_d+\gamma X^\top X/e).
+ \label{eq:sylvester}
+\end{equation}
+Vì vậy luôn chọn
+\begin{equation}
+ r=\min(m,d),\qquad B\in\R^{r\times r}.
+\end{equation}
+
+\subsection{Dùng một Gram cho mọi gamma}
+
+Mỗi layer chỉ tính một lần
+\begin{equation}
+ B=\frac{XX^\top}{e+\epsilon}
+ \quad\text{hoặc}\quad
+ B=\frac{X^\top X}{e+\epsilon}.
+\end{equation}
+Sau đó broadcast toàn bộ $q$ scale:
+\begin{equation}
+ A=I_{[1,r,r]}+gamma_{[q,1,1]}B_{[1,r,r]}
+ \in\R^{q\times r\times r}.
+ \label{eq:batchA}
+\end{equation}
+Không được tính lại $X X^\top$ bên trong vòng lặp gamma.
+
+\subsection{Batched Cholesky}
+
+Với từng $A_j\succ0$:
+\begin{align}
+ A_j&=L_jL_j^\top,\\
+ \log\det(A_j)
+ &=2\sum_{k=1}^{r}\log(L_j)_{kk}.
+ \label{eq:cholesky}
+\end{align}
+Một lệnh \texttt{torch.linalg.cholesky\_ex(A)} xử lý cả batch $q$.  Mọi phép
+tính phổ chạy float32 dù forward chính là fp16/bf16.  Gram được symmetrize:
+\begin{equation}
+ B\leftarrow\frac12(B+B^\top).
+\end{equation}
+Nếu Cholesky hiếm khi thất bại do sai số số học, retry một lần với
+$A_j+10^{-6}I$.
+
+\subsection{Độ phức tạp}
+
+Chi phí mỗi layer xấp xỉ
+\begin{equation}
+ O(mdr)+O(qr^3),\qquad r=\min(m,d).
+\end{equation}
+Với $m=r=64$, $q=2$, $n=4$, phần determinant rất nhỏ so với forward teacher
+14B.  Log thực nghiệm đo khoảng 2.2ms cho CST kernel, trong khi một optimizer
+step đầy đủ của on-policy pipeline khoảng 22.6 giây.  Con số 2.2ms không bao
+gồm toàn bộ chi phí giữ hidden state, nên báo cáo cuối cùng vẫn cần đo end-to-end
+so với output-KD baseline.
+
+\section{CST khác gì NuNo và RPT?}
+
+\begin{table}[t]
+\caption{Phân biệt ba representation objective.}
+\label{tab:compare}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.1cm}
+                >{\raggedright\arraybackslash}p{3.4cm}
+                >{\raggedright\arraybackslash}p{3.4cm}
+                >{\raggedright\arraybackslash}p{3.4cm}}
+\toprule
+ & NuNo & RPT & CST\\
+\midrule
+Đối tượng & Nuclear norm có centroid & Profile tích lũy trị riêng &
+$\log\det(I+\gamma G)$\\
+Projector & Có & Không & Không\\
+Centroid & Có & Không & Không\\
+Eig/SVD khi train & Tránh bằng Newton--Schulz & Phân rã trị riêng & Không\\
+Nhiều scale & Không & Không & Có\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+RPT là baseline phân tích hợp lệ nhưng không phải cách triển khai CST.  Không
+được đơn giản hóa Equation~\ref{eq:cst} thành loss khớp trực tiếp eigenvalue.
+Tương tự, projector đã tồn tại cho NuNo không được tái sử dụng trong CST path.
+
+\section{Cấu hình thực nghiệm đề xuất}
+
+\begin{table}[t]
+\caption{Cấu hình Qwen và CST hiện tại.}
+\label{tab:config}
+\centering
+\small
+\begin{tabular}{ll}
+\toprule
+Teacher $\rightarrow$ student & Qwen2.5-14B $\rightarrow$ 1.5B\\
+Global batch / epochs & 64 / 2\\
+Learning rate / scheduler & $5\times10^{-6}$ / cosine\\
+Warmup / max length & 0.1 / 1024\\
+Số layer / depth range & 4 / $[0.20,0.85]$\\
+Token tối đa $m$ & 64\\
+Số gamma $q$ & 2\\
+Khoảng gamma & $[10^{-2},10^2]$, log-uniform\\
+Khoảng cách transform & squared $\ell_2$\\
+$\lambda_{\cst}$ & 0.003\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tại đầu run, raw CST loss thường nằm khoảng 30--65, còn output-KD khoảng
+1.2--1.4.  Nếu dùng nhầm weight 0.2 của NuNo, thành phần CST có thể lớn khoảng
+12 và áp đảo KD.  Với $\lambda_{\cst}=0.003$, contribution điển hình là
+\begin{equation}
+ 0.003\times60=0.18,
+\end{equation}
+tức khoảng 10--15\% output loss.  Vì hai loss có scale khác nhau, không nên
+đồng nhất $\lambda_{\cst}$ với $\lambda_{\mathrm{NNM}}$.
+
+Grid tune đề xuất:
+\begin{align}
+ \lambda_{\cst}&\in\{0.001,0.003,0.01,0.03\},\\
+ m&\in\{32,64,128\},\\
+ q&\in\{1,2,4\},\\
+ n&\in\{2,4\}.
+\end{align}
+Chỉ thay một trục trong mỗi ablation và giữ seed, dữ liệu, output-KD, decoding
+và evaluator cố định.
+
+\section{Kết quả ban đầu và cách đọc đúng}
+
+Run hiện có dùng 10K training examples, hai epochs, trong khi bảng tham chiếu
+NuNo dùng khoảng 78K examples.  Vì ngân sách chưa bằng nhau, đây là kết quả
+pilot chứ chưa phải chứng minh CST hơn phương pháp khác.
+
+\begin{table*}[t]
+\caption{Accuracy (\%) trên Qwen2.5-14B $\rightarrow$ 1.5B. Các dòng tham
+chiếu lấy từ manuscript NuNo; CST dùng 10K examples. MATH trong average dùng
+exact-match để gần bảng cũ nhất có thể.}
+\label{tab:results}
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+Method & GSM8K & GSM+ & MATH & MBPP & SciQ & STEM & Pro-Math & BBH & Avg.\\
+\midrule
+Student tham chiếu & 57.1 & 38.8 & 16.9 & 38.4 & 85.5 & 49.5 & 34.4 & 36.5 & 44.6\\
+NuNo tham chiếu & 65.2 & 46.8 & 32.2 & 44.4 & 86.2 & 51.7 & 42.0 & 44.9 & 51.7\\
+\midrule
+CST, 10K & 65.58 & 46.79 & 14.92 & 46.80 & 86.90 & 51.95 & 44.49 & 41.87 & 49.91\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+CST 10K tăng 5.3 điểm so với base student tham chiếu và gần bằng NuNo trên
+GSM8K, GSM-Plus, SciQ và STEM.  Nó cao hơn ở MBPP và Pro-Math nhưng thấp hơn ở
+BBH.  Cột MATH cần giải thích riêng.
+
+Harness hiện tại trả về hai metric trên cùng 5,000 generation:
+\begin{align}
+ \texttt{exact\_match}&=14.92,\\
+ \texttt{math\_verify}&=45.06.
+\end{align}
+Trong 4,454 sample file đã kiểm tra, confusion giữa hai metric là:
+\begin{center}
+\begin{tabular}{ccr}
+\toprule
+Exact & Verify & Số mẫu\\
+\midrule
+0 & 0 & 2,372\\
+0 & 1 & 1,409\\
+1 & 1 & 669\\
+1 & 0 & 4\\
+\bottomrule
+\end{tabular}
+\end{center}
+Nhiều câu trong nhóm $(0,1)$ có đáp án toán đúng và được đóng khung
+\texttt{\textbackslash boxed\{...\}}, nhưng thiếu đúng chuỗi ``Final Answer''
+mà exact parser mong đợi.  Vì vậy 14.92 bị ảnh hưởng mạnh bởi format; ngược lại,
+không được so thẳng 45.06 với MATH 32.2 của một evaluator version khác.  Cách
+so sánh hợp lệ là chạy CST, NuNo, RPT và output-KD bằng cùng container, rồi báo
+cả exact và symbolic verification.
+
+\section{Kế hoạch hoàn thiện paper}
+
+\paragraph{Thí nghiệm bắt buộc.}
+\begin{enumerate}
+ \item Chạy đủ khoảng 78K mẫu cho Qwen, ít nhất ba seed cho cấu hình chính.
+ \item Train lại output-KD, NuNo, RPT và CST với cùng data order và budget.
+ \item Đóng băng phiên bản Transformers, lm-eval, vLLM, task YAML và prompt.
+ \item Chạy cặp Gemma2-9B $\rightarrow$ 2B để kiểm tra khả năng tổng quát.
+ \item Báo wall-clock, peak memory và throughput end-to-end, không chỉ CST
+ kernel time.
+\end{enumerate}
+
+\paragraph{Ablation quan trọng.}
+Ngoài $m,q,n,\lambda$, cần so sánh center và không center; log-uniform với fixed
+grid; squared $\ell_2$ với smooth-$\ell_1$; shared gamma với gamma khác nhau
+(negative control); và shared token indices với sampling độc lập (negative
+control).  Hai negative control dự kiến kém hơn vì phá tính so sánh trực tiếp.
+
+\paragraph{Phân tích representation.}
+Eigendecomposition chỉ được dùng offline để vẽ effective rank, entropy và rank
+profile theo layer.  Nó là công cụ kiểm tra CST có thực sự thay đổi geometry
+hay không, không được đưa trở lại training objective.
+
+\section{Rủi ro và giới hạn}
+
+\begin{itemize}
+ \item Hai gamma mỗi step chỉ là estimator thưa của một đường cong liên tục.
+ \item Global token sampling có thể trộn các sequence dài/ngắn không đều.
+ \item Loss scale phụ thuộc khoảng gamma và cần tune lại khi đổi cấu hình.
+ \item Kết quả hiện tại mới có một seed, một model pair và 10K examples.
+ \item Benchmark accuracy không đo safety; distillation có thể sao chép bias và
+ lỗi của teacher.
+\end{itemize}
+
+\section{Kết luận đề xuất}
+
+\cst{} biến bài toán khớp geometry thành bài toán khớp một hàm vô hướng nhiều
+scale.  Trọng tâm phương pháp không phải eigenvalue matching, mà là objective
+transform-level
+\begin{equation*}
+ \Phi_H(\gamma)=\log\det(I+\gamma G_H).
+\end{equation*}
+Thiết kế này giải quyết tự nhiên hidden-width mismatch, loại bỏ projector và
+teacher centroid, đồng thời có đường tính toán Cholesky nhỏ và ổn định.  Kết quả
+10K ban đầu đủ để biện minh cho full-budget study, nhưng mọi tuyên bố vượt NuNo
+phải chờ controlled reproduction với evaluator cố định.
+
+\appendix
+\section{Pseudocode gần với implementation}
+\begin{verbatim}
+idx = response_mask.nonzero()
+idx = random_subset(idx, max_tokens=64)  # một lần mỗi step
+gamma = exp(uniform(log(1e-2), log(1e2), size=[2]))
+
+losses = []
+for s_layer, t_layer in layer_pairs:
+    Xs = center(student_hidden[s_layer][idx]).float()
+    Xt = center(teacher_hidden[t_layer][idx]).float().detach()
+    Bs = smaller_gram(Xs) / (frobenius_sq(Xs) + eps)
+    Bt = smaller_gram(Xt) / (frobenius_sq(Xt) + eps)
+    As = I[None] + gamma[:, None, None] * Bs[None]
+    At = I[None] + gamma[:, None, None] * Bt[None]
+    phi_s = 2 * log(diag(cholesky(As))).sum(-1)
+    phi_t = 2 * log(diag(cholesky(At))).sum(-1)
+    losses.append(mean((phi_s - stopgrad(phi_t)) ** 2))
+
+L_cst = mean(losses)
+L_total = L_output_kd + lambda_cst * L_cst
+\end{verbatim}
+
+\section{Checklist kiểm tra implementation}
+\begin{itemize}
+ \item Không có projector trong CST path.
+ \item Không có centroid, K-means hay random projection.
+ \item Không gọi SVD/eigvalsh trong main loss.
+ \item Teacher và student dùng cùng token indices, layer mapping và gamma.
+ \item Teacher transform stop-gradient.
+ \item Gram chỉ tính một lần mỗi layer rồi dùng lại cho mọi gamma.
+ \item Gamma được batch trong một Cholesky call.
+ \item Dùng determinant space nhỏ hơn và float32.
+ \item Degenerate layer được skip an toàn.
+ \item Unit tests kiểm tra invariance, Sylvester, slogdet reference, gradient,
+ teacher stop-gradient và projector-free dispatch.
+\end{itemize}
+
+\end{document}
