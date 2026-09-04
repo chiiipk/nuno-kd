@@ -115,11 +115,13 @@ def layer_weight(l: int, L: int, sigma: float = 0.15) -> float:
     return 1.0
 
 
-def select_mid_layers(n_layers: int, n_mid: int = 4) -> list:
-    """Select uniformly spaced layers from the paper's 20-85% range."""
+def select_mid_layers(
+    n_layers: int, n_mid: int = 4, layer_min: float = 0.2, layer_max: float = 0.85
+) -> list:
+    """Select uniformly spaced layers from a relative-depth range."""
     import numpy as np
-    lo = max(1, int(0.2 * n_layers))
-    hi = min(n_layers, int(0.85 * n_layers))
+    lo = max(1, int(layer_min * n_layers))
+    hi = min(n_layers, int(layer_max * n_layers))
     if lo >= hi:
         lo = max(0, hi - n_mid)
     return sorted(set(int(i) for i in np.linspace(lo, hi, n_mid, dtype=int).tolist()))

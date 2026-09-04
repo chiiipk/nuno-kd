@@ -318,7 +318,11 @@ def _nnm_effective_ratio(global_step, args):
     """
     warmup = getattr(args, "nnm_warmup_steps", 0)
     ramp   = getattr(args, "nnm_ramp_steps", 0)
-    target = args.nnm_ratio
+    target = (
+        args.cst_loss_weight
+        if args.loss_variant == "cst" and args.cst_loss_weight is not None
+        else args.nnm_ratio
+    )
 
     if global_step < warmup:
         return 0.0
@@ -362,28 +366,40 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
     prev_avg_loss = evaluate(args, tokenizer, model, dataset["dev"], "dev", 0, device, adaptive_threshold)
     replay_buffer = ReplayBuffer(args)
 
-    student_captured_hidden = []
-    hook_handles = []
-    def capture_hook_fn(module, input, output):
-        if module.training: 
-            if isinstance(output, tuple):
-                student_captured_hidden.append(output[0])
-            else:
-                student_captured_hidden.append(output)
+    representation_weight = (
+        args.cst_loss_weight
+        if args.loss_variant == "cst" and args.cst_loss_weight is not None
+        else args.nnm_ratio
+    )
+    nnm_enabled = (nnm_state is not None) and (representation_weight > 0)
 
-    for layer in resolve_transformer_layers(model):
-        h_layer = layer.register_forward_hook(capture_hook_fn)
-        hook_handles.append(h_layer)
+    student_captured_hidden = {}
+    hook_handles = []
+    def make_capture_hook(layer_id):
+        def capture_hook_fn(module, inputs, output):
+            if module.training:
+                student_captured_hidden[layer_id] = (
+                    output[0] if isinstance(output, tuple) else output
+                )
+        return capture_hook_fn
+
+    if nnm_enabled:
+        transformer_layers = resolve_transformer_layers(model)
+        for layer_id in nnm_state["s_mid"]:
+            # hidden-state index 1 is transformer block 0; index 0 is embeddings.
+            block_index = max(0, layer_id - 1)
+            hook_handles.append(transformer_layers[block_index].register_forward_hook(
+                make_capture_hook(layer_id)
+            ))
 
     total_res = []
 
     # ═══ NNM: master switch (config-level) ═══
-    nnm_enabled = (nnm_state is not None) and (args.nnm_ratio > 0)
     if nnm_enabled:
         warmup_s = getattr(args, "nnm_warmup_steps", 0)
         ramp_s   = getattr(args, "nnm_ramp_steps", 0)
         print_rank(f"[NNM] schedule: warmup={warmup_s} steps, "
-                   f"ramp={ramp_s} steps, target_ratio={args.nnm_ratio}")
+                   f"ramp={ramp_s} steps, target_ratio={representation_weight}")
 
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
@@ -392,7 +408,6 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
         for it, (model_batch, no_model_batch, gen_data) in enumerate(train_dataloader):
             dataset["train"].move_to_device(model_batch, no_model_batch, gen_data, device)
             student_captured_hidden.clear()
-            student_captured_hidden.append(None)
             
             if args.lm_data_dir is not None:
                 try:
@@ -459,7 +474,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             use_nnm = nnm_eff_ratio > 0.0
 
             # ═══ NNM: turn on hidden states if needed ═══
-            outputs = model(**model_batch, output_hidden_states=True, use_cache=False)
+            outputs = model(**model_batch, output_hidden_states=False, use_cache=False)
             s_hidden = student_captured_hidden
             
 
@@ -472,7 +487,9 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             if teacher_model is not None:
                 with torch.no_grad():
                     teacher_model.eval()
-                    teacher_outputs = teacher_model(**model_batch, output_hidden_states=True, use_cache=False)
+                    teacher_outputs = teacher_model(
+                        **model_batch, output_hidden_states=use_nnm, use_cache=False
+                    )
                     teacher_logits = teacher_outputs.logits
                 distil_loss = get_distil_loss(args, teacher_logits, no_model_batch, logits, epoch)
                 loss = (1 - args.kd_ratio) * lm_loss + args.kd_ratio * distil_loss
@@ -483,11 +500,12 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             #  NNM loss (warmup-aware)
             # ═══════════════════════════════════════════════════════════════
             nnm_loss = torch.tensor(0.0, device=device)
+            cst_diagnostics = None
             if use_nnm:
                 t_hidden = teacher_outputs.hidden_states
 
                 student_unwrapped = get_unwrapped_student(model)
-                nnm_loss = compute_variant_loss(
+                variant_result = compute_variant_loss(
                     variant=args.loss_variant,
                     projectors=getattr(
                         student_unwrapped,
@@ -503,7 +521,27 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                     R=nnm_state["R"],
                     layer_weights=nnm_state["layer_weights"],
                     ns_iters=args.nnm_ns_iters,
+                    cst_options={
+                        "max_tokens": args.cst_max_tokens,
+                        "num_gamma_samples": args.cst_num_gamma_samples,
+                        "gamma_min": args.cst_gamma_min,
+                        "gamma_max": args.cst_gamma_max,
+                        "gamma_sampling": args.cst_gamma_sampling,
+                        "distance": args.cst_distance,
+                        "center_hidden": args.cst_center_hidden,
+                        "eps": args.cst_eps,
+                        "jitter": args.cst_jitter,
+                        "fixed_gamma_grid": (
+                            [float(x) for x in args.cst_fixed_gamma_grid.split(",")]
+                            if args.cst_fixed_gamma_grid else None
+                        ),
+                        "profile": args.cst_profile,
+                    },
                 )
+                if args.loss_variant == "cst":
+                    nnm_loss, cst_diagnostics = variant_result
+                else:
+                    nnm_loss = variant_result
                 loss = loss + nnm_eff_ratio * nnm_loss
 
             if args.lm_data_dir is not None:
@@ -538,7 +576,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             # Logging
             def get_log(log_loss, log_distil_loss, log_nnm_loss, log_time):
                 return ("train | epoch {:3d} | Iter: {:6d}/{:6d} | global iter: {:6d}/{:6d} | "
-                        "loss: {:.4f} | ds_loss: {:.4f} | nnm_loss: {:.4f} | lr: {:.4e} | "
+                        "loss: {:.4f} | ds_loss: {:.4f} | {}_loss: {:.4f} | lr: {:.4e} | "
                         "scale: {:10.4f} | micro time: {:.3f} | step time: {:.3f}").format(
                     epoch,
                     step,
@@ -547,6 +585,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                     args.total_iters,
                     log_loss,
                     log_distil_loss,
+                    args.loss_variant,
                     log_nnm_loss,
                     lr_scheduler.get_last_lr()[0],
                     optimizer.cur_scale if hasattr(optimizer, "cur_scale") else 0,
@@ -554,11 +593,20 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                     log_time,
                 )
 
+            def get_cst_log():
+                if not cst_diagnostics:
+                    return ""
+                return (" | phi_s: {phi_student_mean:.4f} | phi_t: "
+                        "{phi_teacher_mean:.4f} | phi_gap: {phi_gap_mean:.4f} | "
+                        "gamma: {gamma_mean:.3g} | cst_tokens: {tokens} | "
+                        "cst_ms: {compute_ms:.1f}").format(**cst_diagnostics)
+
             if args.mid_log_num > 0:
                 mid_log_step = args.gradient_accumulation_steps // args.mid_log_num
                 mid_log_step = 1 if mid_log_step == 0 else mid_log_step
                 if step % mid_log_step == 0:
-                    print_rank(get_log(global_loss, global_distil_loss, global_nnm_loss, 0))
+                    print_rank(get_log(global_loss, global_distil_loss, global_nnm_loss, 0)
+                               + get_cst_log())
 
             if global_step % args.log_interval == 0 and step % args.gradient_accumulation_steps == 0:
                 denom = args.log_interval * args.gradient_accumulation_steps
@@ -567,7 +615,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
                     total_distil_loss / denom,
                     total_nnm_loss / denom,
                     total_time / args.log_interval,
-                )
+                ) + get_cst_log()
                 print_rank("*" * 100)
                 print_rank(log_str)
                 print_rank(args.save)
@@ -747,18 +795,25 @@ def prepare_nnm(args, tokenizer, raw_student, teacher_model, dataset, device):
     n_s_layers = s_cfg.num_hidden_layers
     n_t_layers = t_cfg.num_hidden_layers
 
-    s_mid = select_mid_layers(n_s_layers, args.nnm_n_layers)
-    t_mid = select_mid_layers(n_t_layers, args.nnm_n_layers)
+    if args.loss_variant == "cst":
+        n_selected = args.cst_num_layers
+        layer_min, layer_max = args.cst_layer_min, args.cst_layer_max
+    else:
+        n_selected = args.nnm_n_layers
+        layer_min, layer_max = 0.2, 0.85
+    s_mid = select_mid_layers(n_s_layers, n_selected, layer_min, layer_max)
+    t_mid = select_mid_layers(n_t_layers, n_selected, layer_min, layer_max)
     print_rank(f"[NNM] student layers ({n_s_layers}): selected {s_mid}")
     print_rank(f"[NNM] teacher layers ({n_t_layers}): selected {t_mid}")
 
-    # RPT compares token Gram matrices, so hidden widths may differ and no
+    # RPT/CST compare intrinsic geometry, so hidden widths may differ and no
     # projector, random projection, or teacher-centroid pre-pass is needed.
-    if args.loss_variant == "rpt":
+    if args.loss_variant in {"rpt", "cst"}:
         layer_weights = {
             s_lid: layer_weight(s_lid, n_s_layers) for s_lid in s_mid
         }
-        print_rank("[RPT] projector-free setup; skipping centroid pre-pass")
+        print_rank(f"[{args.loss_variant.upper()}] projector-free setup; "
+                   "skipping centroid pre-pass")
         return {
             "s_mid": s_mid,
             "t_mid": t_mid,

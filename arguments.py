@@ -296,14 +296,33 @@ def add_nnm_args(parser: argparse.ArgumentParser):
                             "its target over this many steps. 0 = hard step.")
     group.add_argument(
         "--loss-variant", type=str, default="nnm",
-        choices=["nnm", "nuno", "bnm", "bnmm", "erank", "rpt"],
+        choices=["nnm", "nuno", "bnm", "bnmm", "erank", "rpt", "cst"],
         help="Which structural loss to use as the regularizer. "
              "nnm/nuno = centroid-anchored log-squared match (ours); "
              "bnm = maximize ||H_s||_*; "
              "bnmm = match raw ||H_s||_* to ||H_t||_*; "
              "erank = maximize effective rank of H_s; "
-             "rpt = projector-free normalized rank-profile Wasserstein loss.",
+             "rpt = projector-free normalized rank-profile Wasserstein loss; "
+             "cst = projector-free multi-gamma logdet transform loss.",
     )
+    group.add_argument("--cst-loss-weight", type=float, default=None,
+                       help="CST auxiliary weight; defaults to --nnm-ratio.")
+    group.add_argument("--cst-max-tokens", type=int, default=64)
+    group.add_argument("--cst-num-layers", type=int, default=4)
+    group.add_argument("--cst-layer-min", type=float, default=0.20)
+    group.add_argument("--cst-layer-max", type=float, default=0.85)
+    group.add_argument("--cst-gamma-min", type=float, default=1e-2)
+    group.add_argument("--cst-gamma-max", type=float, default=1e2)
+    group.add_argument("--cst-num-gamma-samples", type=int, default=2)
+    group.add_argument("--cst-gamma-sampling", choices=["log_uniform"], default="log_uniform")
+    group.add_argument("--cst-distance", choices=["l2", "smooth_l1"], default="l2")
+    group.add_argument("--cst-center-hidden", action=argparse.BooleanOptionalAction,
+                       default=True)
+    group.add_argument("--cst-eps", type=float, default=1e-8)
+    group.add_argument("--cst-jitter", type=float, default=1e-6)
+    group.add_argument("--cst-fixed-gamma-grid", type=str, default=None,
+                       help="Comma-separated positive gamma grid for debug/eval.")
+    group.add_argument("--cst-profile", action="store_true")
 
     return parser
 

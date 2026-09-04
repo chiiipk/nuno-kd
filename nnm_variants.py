@@ -32,6 +32,7 @@ from nnm_module import (
     nuclear_norm_ns,
 )
 from rank_profile import rank_profile_loss_one_layer
+from cst_module import compute_cst_loss
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -176,9 +177,10 @@ _VARIANT_FNS = {
     "nuno":  nnm_loss_one_layer,   # alias
     "erank": erank_loss_one_layer,
     "rpt":   rank_profile_loss_one_layer,
+    "cst":   None,
 }
 
-_PROJECTOR_FREE_VARIANTS = {"rpt"}
+_PROJECTOR_FREE_VARIANTS = {"rpt", "cst"}
 
 
 def get_loss_fn(variant: str):
@@ -200,6 +202,7 @@ def compute_variant_loss(
     R,
     layer_weights,
     ns_iters=5,
+    cst_options=None,
 ):
     """
     Drop-in replacement for nnm_module.compute_nnm_loss. Identical signature,
@@ -208,6 +211,12 @@ def compute_variant_loss(
     device = labels.device
     total_loss = torch.tensor(0.0, device=device)
     n_layers = len(student_layer_mapping)
+    if variant == "cst":
+        return compute_cst_loss(
+            s_hidden_states, t_hidden_states, labels,
+            student_layer_mapping, teacher_layer_mapping,
+            **(cst_options or {}),
+        )
     if n_layers == 0:
         return total_loss
 
