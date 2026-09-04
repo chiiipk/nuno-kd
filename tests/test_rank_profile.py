@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 import torch
 
@@ -6,9 +7,25 @@ from data_utils.path_utils import dataset_file_prefix
 from nnm_module import compute_nnm_loss, layer_weight, select_mid_layers
 from nnm_variants import compute_variant_loss
 from rank_profile import rank_profile, rank_profile_loss_one_layer
+from model_structure import resolve_transformer_layers
 
 
 class RankProfileTest(unittest.TestCase):
+    def test_resolve_qwen_layers_across_wrappers(self):
+        layers = [object(), object()]
+        raw = SimpleNamespace(model=SimpleNamespace(layers=layers))
+        delegated = SimpleNamespace(
+            base_model=SimpleNamespace(model=SimpleNamespace(layers=layers))
+        )
+        peft = SimpleNamespace(
+            base_model=SimpleNamespace(
+                model=SimpleNamespace(model=SimpleNamespace(layers=layers))
+            )
+        )
+        self.assertIs(resolve_transformer_layers(raw), layers)
+        self.assertIs(resolve_transformer_layers(delegated), layers)
+        self.assertIs(resolve_transformer_layers(peft), layers)
+
     def test_paper_layer_configuration(self):
         self.assertEqual(select_mid_layers(28, 4), [5, 11, 17, 23])
         self.assertEqual(layer_weight(11, 28), 1.0)

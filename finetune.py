@@ -46,6 +46,7 @@ from distillm import skewed_forward_kl, skewed_reverse_kl
 from distillm import SampleGenerator, ReplayBuffer
 
 from rouge_metric import compute_metrics
+from model_structure import resolve_transformer_layers
 
 from peft import PeftModel
 
@@ -370,7 +371,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             else:
                 student_captured_hidden.append(output)
 
-    for layer in model.base_model.model.model.layers:
+    for layer in resolve_transformer_layers(model):
         h_layer = layer.register_forward_hook(capture_hook_fn)
         hook_handles.append(h_layer)
 
