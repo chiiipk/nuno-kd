@@ -1,0 +1,453 @@
+\documentclass{article}
+\usepackage{iclr2027_conference,times}
+\input{math_commands.tex}
+\usepackage{amsmath,amssymb,booktabs,microtype,multirow}
+\usepackage{hyperref}
+\usepackage{url}
+
+\title{Characteristic Spectral Transform Distillation:\\
+Projector-Free Multi-Scale Geometry Matching for Language Models}
+
+\author{Anonymous Authors}
+
+% Keep commented for double-blind submission.
+% \iclrfinalcopy
+
+\newcommand{\cst}{\textsc{CST}}
+\newcommand{\sg}{\operatorname{sg}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Knowledge distillation for language models usually constrains output
+distributions while leaving intermediate representation geometry
+underspecified.  Existing geometry-aware objectives often require learnable
+width-matching projectors, stored teacher prototypes, or explicit spectral
+decompositions.  We introduce \emph{Characteristic Spectral Transform}
+(\cst) distillation, a projector-free objective that compares student and
+teacher hidden states through the multi-scale transform
+$\Phi_H(\gamma)=\log\det(I+\gamma G_H)$, where $G_H$ is a centered,
+trace-normalized Gram matrix.  Sampling several positive scales $\gamma$
+makes the loss sensitive to the complete normalized spectrum without directly
+matching eigenvalues or requiring equal hidden widths.  A practical estimator
+uses a shared response-token subset, reuses one Gram matrix across scales, and
+evaluates all scales with batched Cholesky factorizations.  This yields an
+auxiliary objective with no inference-time parameters and negligible measured
+kernel overhead.  In a preliminary 10K-example distillation of
+Qwen2.5-14B-Instruct into Qwen2.5-1.5B-Instruct, \cst{} improves the
+eight-task reasoning average from 44.6 for the reference base student to 49.9
+under legacy-compatible metrics, while using only a fraction of the reference
+training budget.  We also identify evaluation-version sensitivity on MATH and
+report both exact-string and symbolic-verification scores.  These results
+motivate transform-level spectral supervision as a simple and scalable
+alternative to projector-based hidden-state alignment.
+\end{abstract}
+
+\section{Introduction}
+
+Autoregressive knowledge distillation (KD) transfers behavior from a large
+teacher to a smaller student by aligning their predictive distributions
+\citep{hinton2015distilling,kim2016sequence,gu2024minillm,agarwal2024gkd}.
+Modern on-policy methods improve this transfer by training on student
+trajectories, reducing the mismatch between training and generation
+\citep{ko2024distillm}.  Nevertheless, an output objective observes hidden
+representations only through the final vocabulary head.  Many different
+intermediate geometries can therefore induce similar token distributions.
+
+Matching hidden states directly is not an entirely satisfactory remedy.
+Teacher and student widths differ, making pointwise losses dependent on a
+learned projector whose parameters and inductive biases become part of the
+objective.  Distributional summaries based on centroids add a precomputation
+stage and state that must be stored during training.  Explicit singular-value
+or eigenvalue matching exposes the training path to expensive decompositions
+and unstable gradients around repeated eigenvalues.  More fundamentally,
+matching a finite ordered spectrum treats the eigenvalues themselves as the
+representation, rather than comparing a characteristic functional of the
+geometry.
+
+We propose \cst{} distillation.  For response-token hidden states
+$H\in\R^{m\times d}$, we center across tokens, normalize total energy, and
+form a positive semidefinite Gram matrix $G_H$ with unit trace.  We then
+evaluate
+\begin{equation}
+  \Phi_H(\gamma)=\log\det(I+\gamma G_H),\qquad \gamma>0,
+  \label{eq:transform}
+\end{equation}
+at multiple randomly sampled scales.  The student learns by matching the
+teacher's transform values at the same scales and token positions.  The
+construction is invariant to translation, isotropic scaling, and orthogonal
+changes of hidden coordinates, and it naturally compares representations of
+different widths.
+
+Our contributions are:
+\begin{itemize}
+  \item We formulate hidden-state distillation as matching a multi-scale
+  log-determinant transform of normalized geometry.  The transform identifies
+  the finite normalized spectrum over any nontrivial interval, but the
+  training loss never computes an eigendecomposition.
+  \item We give a width-agnostic, projector-free estimator using shared token
+  and scale samples, the smaller determinant space, Gram reuse, and batched
+  Cholesky factorization.
+  \item We integrate \cst{} into an on-policy output-KD pipeline and provide
+  numerical, invariance, gradient, degeneracy, and dispatch tests.  Profiling
+  on an RTX PRO 6000 Blackwell reports approximately 2.2ms for the \cst{}
+  kernel at four layers, 64 tokens, and two scales.
+  \item We report a transparent preliminary Qwen study, including the
+  substantial discrepancy between legacy exact-string and modern symbolic
+  MATH evaluation, and state the additional controlled experiments required
+  for a definitive comparison.
+\end{itemize}
+
+\section{Related Work}
+
+\paragraph{Language-model distillation.}
+Classical KD minimizes a softened output divergence
+\citep{hinton2015distilling}, while sequence-level KD trains on teacher
+sequences \citep{kim2016sequence}.  On-policy approaches instead expose the
+teacher to student-generated trajectories.  MiniLLM uses reverse KL
+\citep{gu2024minillm}; GKD generalizes the divergence family
+\citep{agarwal2024gkd}; and DistiLLM combines adaptive sampling and skewed
+divergences \citep{ko2024distillm}.  \cst{} is complementary to these methods:
+it leaves output KD unchanged and adds intermediate geometric supervision.
+
+\paragraph{Representation transfer.}
+Intermediate-feature distillation has long used layer mappings and learned
+projections to reconcile dimensionality \citep{romero2015fitnets,sun2019patient}.
+Relational objectives transfer pairwise or higher-order structure instead of
+coordinates \citep{park2019relational,tung2019similarity}.  Recent spectral
+approaches diagnose or regularize representation collapse through rank,
+nuclear norm, or entropy summaries \citep{roy2007effective,jing2022dimensional}.
+Our distinction is operational and conceptual: \cst{} matches a
+characteristic transform, uses neither a learnable width adapter nor a teacher
+prototype bank, and avoids explicit spectrum computation in training.
+
+\paragraph{Log determinants.}
+Log-determinant functionals occur in Gaussian information measures,
+experimental design, and diversity objectives.  If $p_i$ are the eigenvalues
+of a trace-normalized PSD matrix, Equation~\ref{eq:transform} equals
+$\sum_i\log(1+\gamma p_i)$.  Rather than maximizing this quantity at a fixed
+scale, we use its curve over scale as a signature that the student matches to
+the teacher.
+
+\section{Characteristic Spectral Transform Distillation}
+
+\subsection{Normalized hidden-state geometry}
+
+Let $H\in\R^{m\times d}$ contain the hidden states of $m$ selected response
+tokens at one layer.  Define
+\begin{align}
+  X &= H-\mathbf{1}\bar h^\top, &
+  \bar h &= \frac{1}{m}\sum_{i=1}^m H_{i,:},\\
+  e_H &= \lVert X\rVert_F^2, &
+  G_H &= \frac{XX^\top}{e_H+\epsilon}.
+  \label{eq:gram}
+\end{align}
+For nondegenerate $X$, $G_H\succeq0$ and $\Tr(G_H)\approx1$.  Centering
+removes global translation, while energy normalization removes isotropic
+scale.  Because $XX^\top$ is unchanged by $X\mapsto XQ$ for orthogonal $Q$,
+the construction does not require teacher and student coordinates to align.
+
+\subsection{A multi-scale spectral signature}
+
+For $gamma>0$, \cst{} is Equation~\ref{eq:transform}.  Writing the positive
+eigenvalues of $G_H$ as $p_1,\ldots,p_r$ gives the analysis identity
+\begin{equation}
+  \Phi_H(\gamma)=\sum_{i=1}^{r}\log(1+\gamma p_i).
+  \label{eq:spectral-identity}
+\end{equation}
+Equation~\ref{eq:spectral-identity} explains the signal but is \emph{not} the
+training algorithm.  Small scales emphasize low-order spectral moments,
+whereas large scales increasingly expose rank and the distribution of energy
+among active directions.  In particular,
+\begin{equation}
+ \Phi_H(\gamma)
+ =\gamma-\frac{\gamma^2}{2}\Tr(G_H^2)+O(\gamma^3),
+ \label{eq:taylor}
+\end{equation}
+because $\Tr(G_H)=1$.  The first nonconstant discriminative term therefore
+measures spectral concentration.
+
+The transform is characteristic for a finite spectrum.  Differentiating,
+\begin{equation}
+ \Phi'_H(\gamma)=\sum_i\frac{p_i}{1+\gamma p_i},
+\end{equation}
+a rational function whose poles and residues determine the nonzero $p_i$.
+Thus equality of transforms on an open positive interval implies equality of
+the normalized nonzero spectra, including multiplicities.  Finite Monte Carlo
+sampling provides a stochastic approximation to this population criterion.
+
+\subsection{Distillation objective}
+
+For matched student and teacher layers $\ell_s$ and $\ell_t$, we sample the
+same valid response-token indices and scales
+\begin{equation}
+ \log\gamma_j\sim
+ \mathcal U(\log\gamma_{\min},\log\gamma_{\max}),
+ \quad j=1,\ldots,q.
+\end{equation}
+The per-layer loss is
+\begin{equation}
+ \mathcal L_{\cst}^{(\ell)}=
+ \frac{1}{q}\sum_{j=1}^{q}
+ \left[
+   \Phi_{H_s^{(\ell_s)}}(\gamma_j)
+   -\sg\!\left(\Phi_{H_t^{(\ell_t)}}(\gamma_j)\right)
+ \right]^2,
+\end{equation}
+and we average uniformly across $n$ selected layers.  The complete objective is
+\begin{equation}
+ \mathcal L=\mathcal L_{\mathrm{output\text{-}KD}}
+ +\lambda_{\cst}\mathcal L_{\cst}.
+ \label{eq:total}
+\end{equation}
+No student-to-teacher hidden projector appears in this path.  The teacher
+transform is computed under stop-gradient, and \cst{} introduces no
+inference-time module.
+
+\subsection{Efficient and stable computation}
+
+We do not call a determinant, inverse, SVD, or eigendecomposition.  Given the
+centered $X$, we construct only the smaller Gram space.  When $m\leq d$ we use
+$B=XX^\top/(e_H+\epsilon)$.  If $d<m$, Sylvester's determinant theorem gives
+\begin{equation}
+ \det(I_m+\gamma XX^\top/e_H)
+ =\det(I_d+\gamma X^\top X/e_H),
+\end{equation}
+so we instead use $B=X^\top X/(e_H+\epsilon)$.  After symmetrization, all
+$q$ matrices are constructed at once:
+\begin{equation}
+ A_j=I+\gamma_jB,\qquad
+ A\in\R^{q\times r\times r},\quad r=\min(m,d).
+\end{equation}
+A single batched Cholesky call produces $A_j=L_jL_j^\top$, followed by
+\begin{equation}
+ \Phi_H(\gamma_j)=2\sum_k\log (L_j)_{kk}.
+\end{equation}
+All spectral arithmetic is float32.  We retry with a small diagonal jitter
+only if Cholesky reports failure and skip layers with negligible centered
+energy.  The dominant per-layer costs are $O(md r)$ for the smaller Gram and
+$O(qr^3)$ for Cholesky, with $r=m=64$ in our default LLM setting.
+
+\begin{table}[t]
+\caption{Default \cst{} training configuration.  One token subset and one set
+of scales are shared by teacher, student, and all supervised layers.}
+\label{tab:config}
+\centering
+\small
+\begin{tabular}{lc@{\qquad}lc}
+\toprule
+Maximum response tokens $m$ & 64 & Supervised layers $n$ & 4\\
+Gamma samples $q$ & 2 & Layer-depth range & $[0.20,0.85]$\\
+$\gamma_{\min},\gamma_{\max}$ & $10^{-2},10^2$ & Sampling & log-uniform\\
+Distance & squared $\ell_2$ & Arithmetic & float32\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Experimental Setup}
+
+\paragraph{Models and data.}
+Our preliminary experiment distills Qwen2.5-14B-Instruct into
+Qwen2.5-1.5B-Instruct \citep{qwen2024qwen25}.  Training uses 10K prompts from
+UltraInteract \citep{yuan2024ultrainteract}, rather than the full roughly 78K
+budget used by the reference study.  Student responses are generated on
+policy.  We train for two epochs with global batch size 64, AdamW, learning
+rate $5\times10^{-6}$, cosine decay, 10\% warmup, maximum length 1024, and
+output-KD temperature 1.  Four uniformly spaced layers in relative depth
+$[0.20,0.85]$ are supervised.  Based on loss-scale calibration, we use
+$\lambda_{\cst}=0.003$; the raw transform loss has a different scale from
+nuclear-norm losses and should not inherit their coefficient.
+
+\paragraph{Evaluation.}
+We use lm-evaluation-harness with greedy decoding and the model chat template.
+The suite contains GSM8K, GSM-Plus, MATH, MBPP, SciQ, MMLU-STEM,
+MMLU-Pro-Math, and three-shot BBH-CoT.  Evaluation runs in bfloat16 through
+vLLM on one RTX PRO 6000 Blackwell GPU.  For compatibility with the published
+table we report the harness's exact-match MATH score in the main average.  The
+current harness also provides symbolic \texttt{math\_verify}; because it
+labels many mathematically equivalent answers that exact matching rejects, we
+report it separately and do not substitute it into the legacy average.
+
+\paragraph{Baselines and reporting status.}
+Student, CSD, and NuNo-KD numbers from the reference NuNo-KD manuscript
+\citep{anonymous2026nuno} are included only as contextual
+references, not as controlled reproductions.  Their training budget and, for
+MATH, evaluator version differ from ours.  A final submission must replace
+these comparisons with checkpoints trained on the same data and evaluated by
+the same frozen harness.  We include this explicit limitation to prevent the
+preliminary results from being interpreted as a definitive ranking.
+
+\section{Results}
+
+\begin{table*}[t]
+\caption{Preliminary Qwen2.5-14B $\rightarrow$ 1.5B reasoning accuracy (\%).
+Reference rows are contextual and use the NuNo-KD manuscript's full training
+budget.  Our \cst{} row uses 10K examples.  MATH uses legacy-compatible exact
+match; \texttt{math\_verify} for the same \cst{} generations is 45.06.}
+\label{tab:main-results}
+\centering
+\small
+\setlength{\tabcolsep}{3.0pt}
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+Method & GSM8K & GSM+ & MATH & MBPP & SciQ & STEM & Pro-Math & BBH & Avg.\\
+\midrule
+Student (reference) & 57.1 & 38.8 & 16.9 & 38.4 & 85.5 & 49.5 & 34.4 & 36.5 & 44.6\\
+CSD (reference) & 61.5 & 41.5 & 29.3 & 43.8 & 81.9 & 51.3 & 44.4 & 42.1 & 49.5\\
+NuNo-KD (reference) & 65.2 & 46.8 & 32.2 & 44.4 & 86.2 & 51.7 & 42.0 & 44.9 & 51.7\\
+\midrule
+\cst{} (ours, 10K) & \textbf{65.58} & 46.79 & 14.92 & \textbf{46.80} & \textbf{86.90} &
+\textbf{51.95} & \textbf{44.49} & 41.87 & 49.91\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Despite using 10K rather than roughly 78K prompts, \cst{} improves the
+reference base-student average by 5.3 points and reaches 49.91 under the
+legacy-compatible metric selection (Table~\ref{tab:main-results}).  Its
+GSM8K score is 65.58, with standard error 1.31 points, statistically
+indistinguishable from the reference NuNo-KD value of 65.2.  Gains are also
+visible on MBPP, SciQ, MMLU-STEM, and MMLU-Pro-Math.  BBH-CoT remains below the
+reference NuNo-KD score.
+
+MATH requires special care.  Current-harness exact match is 14.92, whereas
+symbolic verification gives 45.06 on identical generations.  Among 4,454
+available per-sample records, 1,409 are rejected by exact match but accepted by
+symbolic verification; inspection shows many contain a correct boxed answer
+without the exact expected ``Final Answer'' surface form.  Only four examples
+show the reverse disagreement.  This establishes strong evaluator sensitivity
+but does not establish that 45.06 is comparable to the published 32.2.  The
+scientifically valid resolution is to evaluate every checkpoint using both
+frozen metrics.
+
+\paragraph{Efficiency.}
+At $m=64$, $q=2$, and $n=4$, the reported \cst{} transform computation is
+approximately 2.2ms, while an optimizer step in the complete on-policy KD
+pipeline takes roughly 22.6s.  This timing isolates the transform kernel and
+does not imply that hidden-state capture is free; nevertheless, it indicates
+that batched log-determinant evaluation is not the runtime bottleneck.  The
+model uses about 31.6GiB allocated GPU memory after initialization in the
+reported setup and encounters no \cst{}-related out-of-memory event.
+
+\section{Analysis and Discussion}
+
+\subsection{Why multiple scales?}
+At a single small $\gamma$, unit trace makes transforms nearly identical.  At
+one large $\gamma$, the signal can be dominated by effective rank and very
+small eigenvalues.  Log-uniform sampling over four orders of magnitude mixes
+these regimes without constructing a dense grid.  Crucially, teacher and
+student receive identical samples, so stochasticity does not introduce a
+scale mismatch.  An ablation over $q\in\{1,2,4\}$ and narrower scale intervals
+is still needed to quantify this design choice.
+
+\subsection{Relation to rank-profile matching}
+Rank-profile matching explicitly eigendecomposes a normalized Gram matrix,
+sorts eigenvalues, and compares cumulative spectra.  It is a useful analysis
+and baseline tool, but it is not \cst{}.  \cst{} compares evaluations of an
+analytic transform and obtains gradients through Cholesky factorization.  It
+therefore avoids eigenvector sensitivity at repeated eigenvalues and does not
+turn the method into direct eigenvalue regression.
+
+\subsection{Loss-scale calibration}
+Raw \cst{} losses in early training are commonly tens of units because the
+squared gap aggregates transform differences across broad random scales.  A
+coefficient copied from a differently normalized representation objective can
+therefore dominate output KD.  In our run, $\lambda_{\cst}=0.2$ would
+contribute roughly 12 units when output KD is about 1.4.  We instead select
+0.003, yielding a typical contribution of 8--16\% of output loss.  Future work
+should tune this value on a held-out validation protocol or normalize the
+distance while preserving the transform-level objective.
+
+\section{Limitations and Required Confirmatory Experiments}
+
+The current evidence is preliminary.  First, the 10K training budget differs
+from the full reference budget, and published baseline numbers are not
+same-run controls.  Second, we report one seed and one model pair.  Third,
+MATH metrics changed across harness versions.  Fourth, the present objective
+samples response tokens globally across a batch; while indices are shared
+across models and layers, alternative per-sequence sampling may change the
+geometry.  Finally, transform equality is identifying over a continuum, while
+training observes only two random scales per step.
+
+A confirmatory study should include: (i) full-budget Qwen and Gemma2 model
+pairs; (ii) output-KD, NuNo-KD, rank-profile, and \cst{} trained with identical
+seeds and data; (iii) at least three seeds for the principal comparison;
+(iv) ablations over $m\in\{32,64,128\}$, $q\in\{1,2,4\}$,
+$n\in\{2,4\}$, gamma range, centering, and loss weight; (v) wall-clock and
+peak-memory comparisons including hidden-state capture; and (vi) frozen
+evaluation containers with both exact and symbolic MATH scoring.
+
+\section{Conclusion}
+
+We introduced \cst{}, a projector-free representation-distillation objective
+based on the characteristic curve $\log\det(I+\gamma G_H)$.  Matching this
+curve at shared random scales transfers normalized spectral geometry without
+matching coordinates, widths, or eigenvalues directly.  The estimator uses
+small response-token subsets and batched Cholesky factorizations, making its
+measured kernel cost negligible within on-policy LLM distillation.  A
+preliminary 10K-example Qwen experiment is promising but also exposes the need
+for controlled full-budget baselines and frozen MATH evaluation.  We view
+these transparent intermediate findings as evidence that transform-level
+geometry is a useful direction, rather than as a final claim of superiority.
+
+\section*{Ethics Statement}
+This work studies model compression and may reduce inference resource use.
+Distillation can also transfer teacher errors, biases, and unsafe behaviors;
+the proposed representation objective does not mitigate these risks by
+itself.  Benchmark accuracy should not be interpreted as evidence of safety or
+fitness for deployment.
+
+\section*{Reproducibility Statement}
+The implementation exposes token count, layer range, gamma distribution,
+number of scale samples, distance, centering, jitter, and loss weight.  Tests
+cover Cholesky--log-determinant agreement, Sylvester's identity, invariances,
+shared gamma samples, unequal hidden widths, teacher stop-gradient, degenerate
+representations, and absence of projector/NuNo state in dispatch.  Exact
+commands and evaluator outputs should accompany a submission; the present
+draft marks results that still require controlled reproduction.
+
+\section*{AI Use Statement}
+Generative AI tools assisted with code review, experiment-log summarization,
+and preparation of an initial manuscript draft.  The authors are responsible
+for verifying all mathematical statements, citations, experimental results,
+and final prose, and for ensuring compliance with the conference policy.
+
+\bibliography{references}
+\bibliographystyle{iclr2027_conference}
+
+\appendix
+\section{Reference implementation pseudocode}
+\begin{verbatim}
+indices = sample_response_tokens(labels, max_tokens=m)
+gamma = exp(uniform(log(gamma_min), log(gamma_max), [q]))
+losses = []
+for student_layer, teacher_layer in matched_layers:
+    Xs = center(student_hidden[student_layer][indices]).float()
+    Xt = center(teacher_hidden[teacher_layer][indices]).float().detach()
+    Bs = smaller_gram(Xs) / (squared_frobenius(Xs) + eps)
+    Bt = smaller_gram(Xt) / (squared_frobenius(Xt) + eps)
+    As = I[None] + gamma[:, None, None] * Bs[None]
+    At = I[None] + gamma[:, None, None] * Bt[None]
+    phi_s = 2 * log(diag(cholesky(As))).sum(-1)
+    phi_t = 2 * log(diag(cholesky(At))).sum(-1)
+    losses.append(mean((phi_s - stopgrad(phi_t)) ** 2))
+return mean(losses)
+\end{verbatim}
+
+\section{Additional numerical safeguards}
+Hidden states with centered energy below $\epsilon$ are skipped.  Gram
+matrices are explicitly symmetrized to suppress floating-point asymmetry.  We
+use \texttt{cholesky\_ex} to inspect factorization status and add
+$10^{-6}I$ only on failure.  Teacher hidden states and transforms are detached.
+All selected layers share response-token indices and gamma probes within an
+optimization step.
+
+\section{Per-category MATH scores}
+Current-harness symbolic-verification accuracies are 63.77 (algebra), 37.55
+(counting and probability), 38.20 (geometry), 26.69 (intermediate algebra),
+35.74 (number theory), 60.39 (prealgebra), and 32.05 (precalculus), for an
+aggregate of 45.06.  Corresponding exact-string scores aggregate to 14.92.
+These values are reported to make evaluator-version effects auditable.
+
+\end{document}
