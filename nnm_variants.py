@@ -33,6 +33,7 @@ from nnm_module import (
 )
 from rank_profile import rank_profile_loss_one_layer, compute_rank_profile_loss
 from cst_module import compute_cst_loss
+from structural_ablation_losses import compute_structural_ablation_loss
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -178,9 +179,15 @@ _VARIANT_FNS = {
     "erank": erank_loss_one_layer,
     "rpt":   rank_profile_loss_one_layer,
     "cst":   None,
+    "hidden_mse": None,
+    "gram": None,
+    "cka": None,
+    "normalized_spectrum": None,
+    "direct_spectrum": None,
 }
 
-_PROJECTOR_FREE_VARIANTS = {"rpt", "cst"}
+_STRUCTURAL_VARIANTS = {"hidden_mse", "gram", "cka", "normalized_spectrum", "direct_spectrum"}
+_PROJECTOR_FREE_VARIANTS = {"rpt", "cst", "gram", "cka", "normalized_spectrum", "direct_spectrum"}
 
 
 def get_loss_fn(variant: str):
@@ -223,6 +230,13 @@ def compute_variant_loss(
             s_hidden_states, t_hidden_states, labels,
             student_layer_mapping, teacher_layer_mapping,
             **(rpt_options or {}),
+        )
+    if variant in _STRUCTURAL_VARIANTS:
+        return compute_structural_ablation_loss(
+            variant, projectors, s_hidden_states, t_hidden_states, labels,
+            student_layer_mapping, teacher_layer_mapping,
+            max_tokens=(cst_options or {}).get("max_tokens", 64),
+            eps=(cst_options or {}).get("eps", 1e-8),
         )
     if n_layers == 0:
         return total_loss

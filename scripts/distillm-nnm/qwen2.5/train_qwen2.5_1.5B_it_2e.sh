@@ -1,6 +1,10 @@
 #! /bin/bash
 
-GPUS=(0 1 2 3 4 5 6 7)
+if [[ -n "${RUN_GPUS:-}" ]]; then
+  IFS=',' read -r -a GPUS <<< "${RUN_GPUS}"
+else
+  GPUS=(0 1 2 3 4 5)
+fi
 export CUDA_VISIBLE_DEVICES=$(IFS=,; echo "${GPUS[*]}")
 
 MASTER_ADDR=localhost
@@ -17,34 +21,39 @@ DISTRIBUTED_ARGS="--nproc_per_node $GPUS_PER_NODE \
 
 # ───── model ─────
 BASE_PATH=.
-CKPT_NAME="qwen2.5-1.5B-Instruct"
-CKPT="Qwen/Qwen2.5-1.5B-Instruct"
-TEACHER_CKPT_NAME="qwen2.5-14B-Instruct"
-TEACHER_CKPT="Qwen/Qwen2.5-14B-Instruct"
+CKPT_NAME=${CKPT_NAME:-qwen2.5-1.5B-Instruct}
+CKPT=${CKPT:-Qwen/Qwen2.5-1.5B-Instruct}
+TEACHER_CKPT_NAME=${TEACHER_CKPT_NAME:-qwen2.5-14B-Instruct}
+TEACHER_CKPT=${TEACHER_CKPT:-Qwen/Qwen2.5-14B-Instruct}
 
 # ───── data ─────
-DATA_DIR="./processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct/"
+DATA_DIR=${DATA_DIR:-./processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct/}
 
-BATCH_SIZE=8
-LR=1e-4
-GRAD_ACC=1
-EVAL_BATCH_SIZE=32
-MAX_LENGTH=1025
-SEED=10
-EPOCHS=2
-KD_R=1.0
+BATCH_SIZE=${BATCH_SIZE:-8}
+LR=${LR:-1e-4}
+GRAD_ACC=${GRAD_ACC:-1}
+EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-32}
+MAX_LENGTH=${MAX_LENGTH:-1025}
+SEED=${SEED:-10}
+EPOCHS=${EPOCHS:-2}
+KD_R=${KD_R:-1.0}
 
 # ───── SFKL ─────
 SKEW_ALPHA=0.1
 
-NNM_RATIO=0.1
-NNM_K=128
-NNM_N_LAYERS=4
-NNM_D_PRIME=256
-NNM_CENTROID_BATCHES=500
+NNM_RATIO=${NNM_RATIO:-0.1}
+NNM_K=${NNM_K:-128}
+NNM_N_LAYERS=${NNM_N_LAYERS:-4}
+NNM_D_PRIME=${NNM_D_PRIME:-256}
+NNM_CENTROID_BATCHES=${NNM_CENTROID_BATCHES:-500}
 LOSS_VARIANT=${LOSS_VARIANT:-nnm}
 
-SAVE_PATH="./results/${CKPT_NAME}#sfkl_nnm_lora/${LOSS_VARIANT}${NNM_RATIO}_K${NNM_K}_L${NNM_N_LAYERS}_epoch${EPOCHS}_lr${LR}_kdr${KD_R}"
+if [[ "${LOSS_VARIANT}" == "cst" ]]; then
+  NNM_RATIO=${CST_LOSS_WEIGHT:-0.003}
+fi
+
+SAVE_ROOT=${SAVE_ROOT:-./results}
+SAVE_PATH="${SAVE_ROOT}/${CKPT_NAME}#sfkl_nnm_lora/${LOSS_VARIANT}${NNM_RATIO}_K${NNM_K}_L${NNM_N_LAYERS}_epoch${EPOCHS}_lr${LR}_kdr${KD_R}"
 
 
 OPTS=""
@@ -119,6 +128,19 @@ OPTS+=" --nnm-ns-iters 5"
 OPTS+=" --nnm-warmup-steps 100"
 OPTS+=" --nnm-ramp-steps 200"
 OPTS+=" --delta-threshold 0.03"
+
+if [[ "${LOSS_VARIANT}" == "cst" ]]; then
+  OPTS+=" --cst-loss-weight ${NNM_RATIO}"
+  OPTS+=" --cst-max-tokens 64"
+  OPTS+=" --cst-num-layers 4"
+  OPTS+=" --cst-layer-min 0.20"
+  OPTS+=" --cst-layer-max 0.85"
+  OPTS+=" --cst-gamma-min 1e-2"
+  OPTS+=" --cst-gamma-max 1e2"
+  OPTS+=" --cst-num-gamma-samples 2"
+  OPTS+=" --cst-gamma-sampling log_uniform"
+  OPTS+=" --cst-distance l2"
+fi
 
 
 export NCCL_DEBUG=""

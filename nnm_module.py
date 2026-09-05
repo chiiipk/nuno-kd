@@ -124,6 +124,8 @@ def select_mid_layers(
     hi = min(n_layers, int(layer_max * n_layers))
     if lo >= hi:
         lo = max(0, hi - n_mid)
+    if n_mid == 1:
+        return [int(round((lo + hi) / 2))]
     return sorted(set(int(i) for i in np.linspace(lo, hi, n_mid, dtype=int).tolist()))
 
 

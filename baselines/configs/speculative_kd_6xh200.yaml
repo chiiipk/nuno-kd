@@ -1,0 +1,42 @@
+task_params:
+  task_type: gsm
+  inp_length: 512
+  max_new_tokens: 512
+  expected_seq_len: 0
+
+kd_params:
+  kd_type: skd
+  top_k: 25
+  student_temperature: 0.5
+  student_top_p: 0.5
+  teacher_temperature: 0.2
+  teacher_top_p: 0.5
+  distance_metric: kl
+
+training_params:
+  seed: 10
+  lr: 5.0e-6
+  grad_acc_size: 1
+  num_epoch: 2
+  eval_step: 100
+  early_stop_epoch: 2
+  mixed_precision: bf16
+
+model_params:
+  checkpoint_template: Qwen/Qwen2.5-14B-Instruct
+  assistant_checkpoint_template: Qwen/Qwen2.5-1.5B-Instruct
+  assistant_checkpoint_override: Qwen/Qwen2.5-1.5B-Instruct
+  tokenizer_name: Qwen/Qwen2.5-1.5B-Instruct
+
+resource_params:
+  gpu_group: "0,1,2,3,4,5"
+  num_processes: 6
+  main_process_port: 29521
+  user: local
+  wandb_key: disabled
+  wandb_proj: cst-baselines
+
+exec_params:
+  debug_enable: false
+  enable_stop_token: true
+  ckpt_prefix: h200_6gpu

@@ -82,7 +82,10 @@ def main():
 
         # 2. Mapping all datas with Encoder, with the help of multiprocessing
         pool = multiprocessing.Pool(processes=args.data_process_workers, initializer=encoder.initializer)
-        encoded_docs = pool.imap_unordered(encoder.encode, all_data[split], chunksize=50)
+        # Preserve the canonical raw JSONL order. Exact dataset reproduction
+        # requires more than an equal sample set: every trainer must see the
+        # same sequence before its seeded sampler is applied.
+        encoded_docs = pool.imap(encoder.encode, all_data[split], chunksize=50)
         proc_start = time.time()
         total_bytes_processed = 0
 

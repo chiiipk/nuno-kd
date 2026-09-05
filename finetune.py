@@ -237,6 +237,9 @@ def get_distil_loss(args, teacher_logits, no_model_batch, logits, epoch):
         elif "amid" in args.type:
             from distillm import amid
             distil_loss = amid(logits, teacher_logits, no_model_batch, args, epoch=epoch)
+        elif "csd" in args.type:
+            from distillm import csd
+            distil_loss = csd(logits, teacher_logits, no_model_batch)
         else:
             raise ValueError(f"Distillation type {args.type} is not supported yet.")
     return distil_loss
@@ -796,7 +799,8 @@ def prepare_nnm(args, tokenizer, raw_student, teacher_model, dataset, device):
     n_s_layers = s_cfg.num_hidden_layers
     n_t_layers = t_cfg.num_hidden_layers
 
-    if args.loss_variant == "cst":
+    structural_variants = {"cst", "hidden_mse", "gram", "cka", "normalized_spectrum", "direct_spectrum"}
+    if args.loss_variant in structural_variants:
         n_selected = args.cst_num_layers
         layer_min, layer_max = args.cst_layer_min, args.cst_layer_max
     else:
@@ -809,7 +813,7 @@ def prepare_nnm(args, tokenizer, raw_student, teacher_model, dataset, device):
 
     # RPT/CST compare intrinsic geometry, so hidden widths may differ and no
     # projector, random projection, or teacher-centroid pre-pass is needed.
-    if args.loss_variant in {"rpt", "cst"}:
+    if args.loss_variant in {"rpt", "cst", "gram", "cka", "normalized_spectrum", "direct_spectrum"}:
         layer_weights = {
             s_lid: layer_weight(s_lid, n_s_layers) for s_lid in s_mid
         }
@@ -823,6 +827,20 @@ def prepare_nnm(args, tokenizer, raw_student, teacher_model, dataset, device):
             "layer_weights": layer_weights,
             "d_s": d_s,
             "d_t": d_t,
+        }
+
+    if args.loss_variant == "hidden_mse":
+        proj_dtype = next(raw_student.parameters()).dtype
+        generator = torch.Generator(device="cpu").manual_seed(args.seed + 1)
+        projectors = nn.ModuleList([nn.Linear(d_s, d_t, bias=False) for _ in s_mid])
+        with torch.no_grad():
+            for projector in projectors:
+                projector.weight.copy_(torch.randn(d_t, d_s, generator=generator) * 0.02)
+        raw_student.projectors = projectors.to(device=device, dtype=proj_dtype)
+        print_rank(f"[HIDDEN_MSE] attached {len(projectors)} learned projectors; skipping centroids")
+        return {
+            "s_mid": s_mid, "t_mid": t_mid, "t_centroids": {}, "R": None,
+            "layer_weights": {s_lid: 1.0 for s_lid in s_mid}, "d_s": d_s, "d_t": d_t,
         }
 
     # ── 2. attach projectors (BEFORE deepspeed wraps the model) ─

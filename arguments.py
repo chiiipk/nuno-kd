@@ -296,7 +296,8 @@ def add_nnm_args(parser: argparse.ArgumentParser):
                             "its target over this many steps. 0 = hard step.")
     group.add_argument(
         "--loss-variant", type=str, default="nnm",
-        choices=["nnm", "nuno", "bnm", "bnmm", "erank", "rpt", "cst"],
+        choices=["nnm", "nuno", "bnm", "bnmm", "erank", "rpt", "cst",
+                 "hidden_mse", "gram", "cka", "normalized_spectrum", "direct_spectrum"],
         help="Which structural loss to use as the regularizer. "
              "nnm/nuno = centroid-anchored log-squared match (ours); "
              "bnm = maximize ||H_s||_*; "
@@ -314,7 +315,7 @@ def add_nnm_args(parser: argparse.ArgumentParser):
     group.add_argument("--cst-gamma-min", type=float, default=1e-2)
     group.add_argument("--cst-gamma-max", type=float, default=1e2)
     group.add_argument("--cst-num-gamma-samples", type=int, default=2)
-    group.add_argument("--cst-gamma-sampling", choices=["log_uniform"], default="log_uniform")
+    group.add_argument("--cst-gamma-sampling", choices=["log_uniform", "fixed_grid"], default="log_uniform")
     group.add_argument("--cst-distance", choices=["l2", "smooth_l1"], default="l2")
     group.add_argument("--cst-center-hidden", action=argparse.BooleanOptionalAction,
                        default=True)

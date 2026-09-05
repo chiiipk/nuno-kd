@@ -32,6 +32,7 @@ class RankProfileTest(unittest.TestCase):
 
     def test_paper_layer_configuration(self):
         self.assertEqual(select_mid_layers(28, 4), [5, 11, 17, 23])
+        self.assertEqual(select_mid_layers(28, 1), [14])
         self.assertEqual(layer_weight(11, 28), 1.0)
 
     def test_dataset_path_does_not_require_trailing_slash(self):
