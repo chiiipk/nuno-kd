@@ -140,6 +140,9 @@ def run_parallel_inference(model_path, output_dir, output_file, num_gpus):
 
     for p in processes:
         p.join()
+    failed = [p.pid for p in processes if p.exitcode != 0]
+    if failed:
+        raise RuntimeError(f"generation workers failed: {failed}")
 
     print("\n🔗 Tất cả workers đã xong. Đang gộp kết quả...")
     final_output_path = os.path.join(output_dir, output_file)
@@ -151,6 +154,13 @@ def run_parallel_inference(model_path, output_dir, output_file, num_gpus):
                     for line in infile:
                         outfile.write(line)
                 os.remove(temp_file)
+
+    with open(final_output_path, encoding='utf-8') as infile:
+        written = sum(1 for line in infile if line.strip())
+    if written != total_data:
+        raise RuntimeError(
+            f"incomplete generation: expected {total_data} rows, wrote {written}"
+        )
 
     print(f"🎉 HOÀN TẤT! File tổng hợp được lưu tại: {final_output_path}\n")
 

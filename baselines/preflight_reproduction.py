@@ -74,11 +74,11 @@ def train_checks(methods: tuple[str, ...]) -> None:
     qwen_data = Path(os.environ.get(
         "QWEN_DATA_DIR", str(ROOT / "processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct")
     ))
-    gemma_data = Path(os.environ.get(
-        "GEMMA_DATA_DIR", str(ROOT / "processed_data/ultraInteract/google/gemma-2-9b-it")
+    qwen3_data = Path(os.environ.get(
+        "QWEN3_DATA_DIR", str(ROOT / "processed_data/ultraInteract/Qwen/Qwen3-8B")
     ))
     require(qwen_data.is_dir(), f"missing Qwen processed data: {qwen_data}")
-    require(gemma_data.is_dir(), f"missing Gemma processed data: {gemma_data}")
+    require(qwen3_data.is_dir(), f"missing Qwen3 processed data: {qwen3_data}")
 
     pair_inputs = {
         "qwen": {
@@ -87,11 +87,11 @@ def train_checks(methods: tuple[str, ...]) -> None:
             "skd": os.environ.get("SKD_QWEN_TRAIN_JSONL"),
             "mini": os.environ.get("MINILLM_QWEN_PROMPT_DATA"),
         },
-        "gemma": {
-            "data": gemma_data,
-            "manifest": Path(os.environ.get("GEMMA_DATASET_MANIFEST", gemma_data / "dataset_contract.json")),
-            "skd": os.environ.get("SKD_GEMMA_TRAIN_JSONL"),
-            "mini": os.environ.get("MINILLM_GEMMA_PROMPT_DATA"),
+        "qwen3": {
+            "data": qwen3_data,
+            "manifest": Path(os.environ.get("QWEN3_DATASET_MANIFEST", qwen3_data / "dataset_contract.json")),
+            "skd": os.environ.get("SKD_QWEN3_TRAIN_JSONL"),
+            "mini": os.environ.get("MINILLM_QWEN3_PROMPT_DATA"),
         },
     }
     for pair, inputs in pair_inputs.items():

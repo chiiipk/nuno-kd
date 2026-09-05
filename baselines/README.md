@@ -1,13 +1,13 @@
 # Reproduce the two KD tables on 6 x H200
 
 This workflow trains every requested baseline with two independent seeds and
-evaluates both Qwen and Gemma tables on the same eight lm-eval-harness tasks.
+evaluates both Qwen2.5 and Qwen3 tables on the same eight lm-eval-harness tasks.
 NuNo, TSD-KD, and RPT are deliberately excluded.
 
 ## Scope
 
 Default matrix: Qwen2.5-14B-Instruct -> Qwen2.5-1.5B-Instruct and
-Gemma-2-9B-it -> Gemma-2-2B-it; seeds `10,42`; full processed data
+Qwen3-8B -> Qwen3-1.7B; seeds `10,42`; full processed data
 (`--train-num -1`); two epochs. Methods are Sequence-Level KD, Supervised-KD,
 DistiLLM, Speculative KD, MiniLLM, GKD, CSD, AMiD, and CST.
 
@@ -54,10 +54,10 @@ Common data defaults:
 
 ```text
 processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct
-processed_data/ultraInteract/google/gemma-2-9b-it
+processed_data/ultraInteract/Qwen/Qwen3-8B
 ```
 
-Override with `QWEN_DATA_DIR` and `GEMMA_DATA_DIR`. Create one ordered contract
+Override with `QWEN_DATA_DIR` and `QWEN3_DATA_DIR`. Create one ordered contract
 per pair from the canonical raw teacher-generation file:
 
 ```bash
@@ -67,9 +67,9 @@ python3 baselines/dataset_contract.py create \
   --output processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct/dataset_contract.json
 
 python3 baselines/dataset_contract.py create \
-  --pair gemma \
-  --reference data/dpo/google/gemma-2-9b-it/generated_train.jsonl \
-  --output processed_data/ultraInteract/google/gemma-2-9b-it/dataset_contract.json
+  --pair qwen3 \
+  --reference data/dpo/Qwen/Qwen3-8B/generated_train.jsonl \
+  --output processed_data/ultraInteract/Qwen/Qwen3-8B/dataset_contract.json
 ```
 
 Regenerate old processed data once: the preprocessor now uses ordered
@@ -83,7 +83,7 @@ python3 baselines/dataset_contract.py check \
 ```
 
 Create MiniLLM's JSON prompt dataset from the same raw files (repeat for Qwen
-and Gemma, and export the corresponding validation file as `--split valid`):
+and Qwen3, and export the corresponding validation file as `--split valid`):
 
 ```bash
 python3 baselines/dataset_contract.py export-minillm \
@@ -97,16 +97,16 @@ actual inputs rather than unchecked binary or text files. External variables:
 ```bash
 export SKD_QWEN_TRAIN_JSONL=/data/qwen/generated_train.jsonl
 export SKD_QWEN_VALIDATION_JSONL=/data/qwen/generated_validation.jsonl
-export SKD_GEMMA_TRAIN_JSONL=/data/gemma/generated_train.jsonl
-export SKD_GEMMA_VALIDATION_JSONL=/data/gemma/generated_validation.jsonl
+export SKD_QWEN3_TRAIN_JSONL=/data/qwen3/generated_train.jsonl
+export SKD_QWEN3_VALIDATION_JSONL=/data/qwen3/generated_validation.jsonl
 export MINILLM_QWEN_PROMPT_DATA=/data/minillm/qwen/prompt_data
-export MINILLM_GEMMA_PROMPT_DATA=/data/minillm/gemma/prompt_data
+export MINILLM_QWEN3_PROMPT_DATA=/data/minillm/qwen3/prompt_data
 export MINILLM_LM_DATA=/data/minillm/lm_corpus
 ```
 
 Speculative-KD JSONL rows must contain `prompt` and `generated_text`. Qwen and
-Gemma cannot share one raw file because their teacher-generated outputs differ.
-`QWEN_DATASET_MANIFEST` and `GEMMA_DATASET_MANIFEST` may override contract paths.
+Qwen3 cannot share one raw file because their teacher-generated outputs differ.
+`QWEN_DATASET_MANIFEST` and `QWEN3_DATASET_MANIFEST` may override contract paths.
 
 Every launcher now checks count, the SHA-256 hash of the complete sample
 multiset, and the ordered SHA-256 hash before allocating the model. A changed,
@@ -115,6 +115,17 @@ is an algorithm-specific additional input and is logged separately; the prompt
 training set itself must match the contract exactly.
 
 ## Preflight and run
+
+To generate the missing Qwen3 teacher responses and rebuild both ordered
+processed datasets in one command:
+
+```bash
+bash run_all_6xh200.sh prepare-data
+```
+
+The generation step requires the normal vLLM/Transformers training environment
+and six visible GPUs. Existing complete raw data is reused rather than
+overwritten.
 
 Run the checks in each relevant environment before spending GPU time:
 
@@ -178,7 +189,7 @@ CSV, LaTeX, and JSON outputs are:
 
 ```text
 benchmark_results/reproduce_tables/tables/qwen_full8_mean_std.*
-benchmark_results/reproduce_tables/tables/gemma_full8_mean_std.*
+benchmark_results/reproduce_tables/tables/qwen3_full8_mean_std.*
 ```
 
 `Avg.` is calculated for each seed over all eight tasks, then summarized across

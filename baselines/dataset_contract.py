@@ -118,13 +118,24 @@ def check(manifest: Path, candidate: Path, split: str) -> None:
     )
 
 
+def validate(candidate: Path, expected_count: int | None) -> None:
+    jsonl = resolve_jsonl(candidate, "train")
+    digest = digest_jsonl(jsonl)
+    if expected_count is not None and digest["count"] != expected_count:
+        raise SystemExit(
+            f"DATASET COUNT MISMATCH: {jsonl}: expected {expected_count}, "
+            f"got {digest['count']}"
+        )
+    print(f"[valid] {jsonl}: count={digest['count']:,}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     make = sub.add_parser("create")
     make.add_argument("--reference", type=Path, required=True)
     make.add_argument("--output", type=Path, required=True)
-    make.add_argument("--pair", choices=("qwen", "gemma"), required=True)
+    make.add_argument("--pair", choices=("qwen", "qwen3"), required=True)
     verify = sub.add_parser("check")
     verify.add_argument("--manifest", type=Path, required=True)
     verify.add_argument("--candidate", type=Path, required=True)
@@ -133,13 +144,18 @@ def main() -> None:
     export.add_argument("--reference", type=Path, required=True)
     export.add_argument("--output", type=Path, required=True)
     export.add_argument("--split", choices=("train", "valid"), required=True)
+    inspect = sub.add_parser("validate")
+    inspect.add_argument("--candidate", type=Path, required=True)
+    inspect.add_argument("--expected-count", type=int)
     args = parser.parse_args()
     if args.command == "create":
         create(args.reference, args.output, args.pair)
     elif args.command == "check":
         check(args.manifest, args.candidate, args.split)
-    else:
+    elif args.command == "export-minillm":
         export_minillm(args.reference, args.output, args.split)
+    else:
+        validate(args.candidate, args.expected_count)
 
 
 if __name__ == "__main__":

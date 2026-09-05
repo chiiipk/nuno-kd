@@ -38,7 +38,7 @@ bash ablations/run_6xh200.sh eval
 bash ablations/run_6xh200.sh report
 ```
 
-Use `PAIR=gemma` for a separate Gemma study; Qwen is the default. Results are
+Use `PAIR=qwen3` for a separate Qwen3 study; Qwen2.5 is the default. Results are
 resumable under `results/ablations/`, raw lm-eval samples under
 `benchmark_results/ablations/`, and per-table CSV/LaTeX/JSON under
 `benchmark_results/ablations/tables/`.

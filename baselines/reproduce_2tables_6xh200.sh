@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PHASE="${1:-all}"
 GPU_CSV="${RUN_GPUS:-0,1,2,3,4,5}"
 SEEDS_CSV="${SEEDS:-10,42}"
-PAIRS_CSV="${PAIRS:-qwen,gemma}"
+PAIRS_CSV="${PAIRS:-qwen,qwen3}"
 METHODS_CSV="${METHODS:-seqkd,supervised_kd,distillm,speculative_kd,minillm,gkd,csd,amid,cst}"
 REPORT_METHODS_CSV="${REPORT_METHODS:-teacher,student,${METHODS_CSV}}"
 RESULT_ROOT="${RESULT_ROOT:-${ROOT}/results/reproduce_tables}"
@@ -92,9 +92,9 @@ eval_base_models() {
       teacher="${QWEN_TEACHER_MODEL:-Qwen/Qwen2.5-14B-Instruct}"
       student="${QWEN_STUDENT_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}"
       ;;
-    gemma)
-      teacher="${GEMMA_TEACHER_MODEL:-google/gemma-2-9b-it}"
-      student="${GEMMA_STUDENT_MODEL:-google/gemma-2-2b-it}"
+    qwen3)
+      teacher="${QWEN3_TEACHER_MODEL:-Qwen/Qwen3-8B}"
+      student="${QWEN3_STUDENT_MODEL:-Qwen/Qwen3-1.7B}"
       ;;
   esac
   for role in teacher student; do

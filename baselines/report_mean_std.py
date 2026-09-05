@@ -26,7 +26,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--eval-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--pairs", nargs="+", default=["qwen", "gemma"])
+    parser.add_argument("--pairs", nargs="+", default=["qwen", "qwen3"])
     parser.add_argument("--methods", nargs="+", required=True)
     parser.add_argument("--seeds", nargs="+", type=int, default=[10, 42])
     args = parser.parse_args()

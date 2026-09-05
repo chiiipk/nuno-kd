@@ -5,12 +5,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PHASE="${1:-all}"
 export RUN_GPUS="${RUN_GPUS:-0,1,2,3,4,5}"
 export SEEDS="${SEEDS:-10,42}"
-export PAIRS="${PAIRS:-qwen,gemma}"
+export PAIRS="${PAIRS:-qwen,qwen3}"
 
 setup_all() {
   bash "${ROOT}/baselines/setup_env.sh" legacy
   bash "${ROOT}/baselines/setup_env.sh" speculative_kd
   bash "${ROOT}/baselines/setup_env.sh" evaluator
+}
+
+prepare_data() {
+  bash "${ROOT}/baselines/prepare_all_data.sh"
 }
 
 preflight_all() {
@@ -37,10 +41,11 @@ report_all() {
 
 case "${PHASE}" in
   setup) setup_all ;;
+  prepare-data) prepare_data ;;
   preflight) preflight_all ;;
   train) preflight_all; train_all ;;
   eval) preflight_all; eval_all ;;
   report) report_all ;;
-  all) preflight_all; train_all; eval_all; report_all ;;
-  *) echo "Usage: $0 {setup|preflight|train|eval|report|all}" >&2; exit 2 ;;
+  all) prepare_data; preflight_all; train_all; eval_all; report_all ;;
+  *) echo "Usage: $0 {setup|prepare-data|preflight|train|eval|report|all}" >&2; exit 2 ;;
 esac

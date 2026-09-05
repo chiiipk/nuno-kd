@@ -13,9 +13,9 @@ PYTHONPATH=. python ./tools/process_data_ultraInteract.py \
 
 
 PYTHONPATH=. python ./tools/process_data_ultraInteract.py \
-    --data-dir ./data/dpo/google/gemma-2-9b-it/generated_train.jsonl \
+    --data-dir ./data/dpo/Qwen/Qwen3-8B/generated_train.jsonl \
     --processed-data-dir ./processed_data/ultraInteract \
-    --model-path google/gemma-2-9b-it \
+    --model-path Qwen/Qwen3-8B \
     --data-process-workers 32 \
     --max-prompt-length 512 \
     --dev-num 200 \

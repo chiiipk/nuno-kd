@@ -1,7 +1,7 @@
 # Run every baseline and CST ablation on 6 x H200
 
 `run_all_6xh200.sh` is the single entrypoint for the complete experiment suite.
-It runs the two-seed baseline tables first, then every CST ablation, evaluates
+It runs the two-seed Qwen2.5 and Qwen3 baseline tables first, then every CST ablation, evaluates
 all checkpoints with the same pinned lm-eval-harness, saves raw samples, and
 generates CSV, LaTeX, and JSON reports.
 
@@ -15,14 +15,14 @@ Canonical raw files:
 
 ```text
 data/dpo/Qwen/Qwen2.5-14B-Instruct/generated_train.jsonl
-data/dpo/google/gemma-2-9b-it/generated_train.jsonl
+data/dpo/Qwen/Qwen3-8B/generated_train.jsonl
 ```
 
 The ordered dataset contracts must exist at:
 
 ```text
 processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct/dataset_contract.json
-processed_data/ultraInteract/google/gemma-2-9b-it/dataset_contract.json
+processed_data/ultraInteract/Qwen/Qwen3-8B/dataset_contract.json
 ```
 
 Regenerate processed data with `scripts/process_data_ultraInteract.sh` after
@@ -34,11 +34,11 @@ Configure pair-specific external inputs:
 ```bash
 export SKD_QWEN_TRAIN_JSONL=/data/qwen/generated_train.jsonl
 export SKD_QWEN_VALIDATION_JSONL=/data/qwen/generated_validation.jsonl
-export SKD_GEMMA_TRAIN_JSONL=/data/gemma/generated_train.jsonl
-export SKD_GEMMA_VALIDATION_JSONL=/data/gemma/generated_validation.jsonl
+export SKD_QWEN3_TRAIN_JSONL=/data/qwen3/generated_train.jsonl
+export SKD_QWEN3_VALIDATION_JSONL=/data/qwen3/generated_validation.jsonl
 
 export MINILLM_QWEN_PROMPT_DATA=/data/minillm/qwen/prompt_data
-export MINILLM_GEMMA_PROMPT_DATA=/data/minillm/gemma/prompt_data
+export MINILLM_QWEN3_PROMPT_DATA=/data/minillm/qwen3/prompt_data
 export MINILLM_LM_DATA=/data/minillm/lm_corpus
 ```
 
@@ -58,6 +58,20 @@ separate MiniLLM, Speculative-KD, and evaluator environments. The resolved
 lm-eval commit is recorded and included in every evaluation summary.
 
 ## 3. Preflight
+
+Generate Qwen3 teacher responses, rebuild both ordered datasets/contracts, and
+export MiniLLM training JSON first:
+
+```bash
+bash run_all_6xh200.sh prepare-data |& tee prepare_data.log
+```
+
+`prepare-data` reuses an existing Qwen3 JSONL only after validating its schema
+and expected 79,751 rows. If it is absent, Qwen3-8B generates responses for the
+same prompt source on all six GPUs. Worker failure or a partial output aborts
+the phase. The full `all` phase includes `prepare-data` automatically.
+
+Then run preflight:
 
 ```bash
 bash run_all_6xh200.sh preflight
@@ -87,7 +101,7 @@ Defaults are GPUs `0,1,2,3,4,5`, seeds `10,42`, both baseline model pairs, and
 Qwen for ablations. Overrides:
 
 ```bash
-RUN_GPUS=0,1,2,3,4,5 SEEDS=10,42 PAIRS=qwen,gemma \
+RUN_GPUS=0,1,2,3,4,5 SEEDS=10,42 PAIRS=qwen,qwen3 \
   bash run_all_6xh200.sh train
 ```
 
@@ -96,7 +110,7 @@ ablation tables through symlinks. They are not retrained or reevaluated.
 
 ## What gets run
 
-Baseline table, for Qwen and Gemma with two seeds:
+Baseline tables for Qwen2.5-14B -> 1.5B and Qwen3-8B -> 1.7B with two seeds:
 
 - Sequence-Level KD, Supervised-KD, DistiLLM, Speculative KD, MiniLLM, GKD,
   CSD, AMiD, and CST;

@@ -19,16 +19,16 @@ case "${PAIR}" in
     SKD_VALIDATION_JSONL="${SKD_QWEN_VALIDATION_JSONL:-${SKD_TRAIN_JSONL}}"
     DATASET_MANIFEST="${QWEN_DATASET_MANIFEST:-${ROOT}/processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct/dataset_contract.json}"
     ;;
-  gemma)
-    STUDENT="${GEMMA_STUDENT_MODEL:-google/gemma-2-2b-it}"
-    TEACHER="${GEMMA_TEACHER_MODEL:-google/gemma-2-9b-it}"
-    SKD_TRAIN_JSONL="${SKD_GEMMA_TRAIN_JSONL:-}"
-    SKD_VALIDATION_JSONL="${SKD_GEMMA_VALIDATION_JSONL:-${SKD_TRAIN_JSONL}}"
-    DATASET_MANIFEST="${GEMMA_DATASET_MANIFEST:-${ROOT}/processed_data/ultraInteract/google/gemma-2-9b-it/dataset_contract.json}"
+  qwen3)
+    STUDENT="${QWEN3_STUDENT_MODEL:-Qwen/Qwen3-1.7B}"
+    TEACHER="${QWEN3_TEACHER_MODEL:-Qwen/Qwen3-8B}"
+    SKD_TRAIN_JSONL="${SKD_QWEN3_TRAIN_JSONL:-}"
+    SKD_VALIDATION_JSONL="${SKD_QWEN3_VALIDATION_JSONL:-${SKD_TRAIN_JSONL}}"
+    DATASET_MANIFEST="${QWEN3_DATASET_MANIFEST:-${ROOT}/processed_data/ultraInteract/Qwen/Qwen3-8B/dataset_contract.json}"
     ;;
   *) echo "Unknown pair: ${PAIR}" >&2; exit 2 ;;
 esac
-: "${SKD_TRAIN_JSONL:?Set the pair-specific SKD_QWEN_TRAIN_JSONL or SKD_GEMMA_TRAIN_JSONL}"
+: "${SKD_TRAIN_JSONL:?Set the pair-specific SKD_QWEN_TRAIN_JSONL or SKD_QWEN3_TRAIN_JSONL}"
 mkdir -p "${OUT}"
 python3 "${ROOT}/baselines/dataset_contract.py" check \
   --manifest "${DATASET_MANIFEST}" --candidate "${SKD_TRAIN_JSONL}" \

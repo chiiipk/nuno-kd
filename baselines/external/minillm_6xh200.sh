@@ -24,12 +24,12 @@ case "${PAIR}" in
     PROMPT_DATA="${MINILLM_QWEN_PROMPT_DATA:-}"
     DATASET_MANIFEST="${QWEN_DATASET_MANIFEST:-${ROOT}/processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct/dataset_contract.json}"
     ;;
-  gemma)
-    STUDENT="${GEMMA_STUDENT_MODEL:-google/gemma-2-2b-it}"
-    TEACHER="${GEMMA_TEACHER_MODEL:-google/gemma-2-9b-it}"
-    MODEL_TYPE=llama
-    PROMPT_DATA="${MINILLM_GEMMA_PROMPT_DATA:-}"
-    DATASET_MANIFEST="${GEMMA_DATASET_MANIFEST:-${ROOT}/processed_data/ultraInteract/google/gemma-2-9b-it/dataset_contract.json}"
+  qwen3)
+    STUDENT="${QWEN3_STUDENT_MODEL:-Qwen/Qwen3-1.7B}"
+    TEACHER="${QWEN3_TEACHER_MODEL:-Qwen/Qwen3-8B}"
+    MODEL_TYPE=qwen
+    PROMPT_DATA="${MINILLM_QWEN3_PROMPT_DATA:-}"
+    DATASET_MANIFEST="${QWEN3_DATASET_MANIFEST:-${ROOT}/processed_data/ultraInteract/Qwen/Qwen3-8B/dataset_contract.json}"
     ;;
   *) echo "Unknown pair: ${PAIR}" >&2; exit 2 ;;
 esac

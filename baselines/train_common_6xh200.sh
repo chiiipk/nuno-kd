@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PAIR="${1:?pair required: qwen or gemma}"
+PAIR="${1:?pair required: qwen or qwen3}"
 METHOD="${2:?method required}"
 SEED="${3:?seed required}"
 
@@ -20,13 +20,13 @@ case "${PAIR}" in
     DATA_DIR="${QWEN_DATA_DIR:-${ROOT}/processed_data/ultraInteract/Qwen/Qwen2.5-14B-Instruct}"
     DATASET_MANIFEST="${QWEN_DATASET_MANIFEST:-${DATA_DIR}/dataset_contract.json}"
     ;;
-  gemma)
-    STUDENT_MODEL="${GEMMA_STUDENT_MODEL:-google/gemma-2-2b-it}"
-    TEACHER_MODEL="${GEMMA_TEACHER_MODEL:-google/gemma-2-9b-it}"
-    STUDENT_NAME="gemma2-2b-it"
-    TEACHER_NAME="gemma2-9b-it"
-    DATA_DIR="${GEMMA_DATA_DIR:-${ROOT}/processed_data/ultraInteract/google/gemma-2-9b-it}"
-    DATASET_MANIFEST="${GEMMA_DATASET_MANIFEST:-${DATA_DIR}/dataset_contract.json}"
+  qwen3)
+    STUDENT_MODEL="${QWEN3_STUDENT_MODEL:-Qwen/Qwen3-1.7B}"
+    TEACHER_MODEL="${QWEN3_TEACHER_MODEL:-Qwen/Qwen3-8B}"
+    STUDENT_NAME="qwen3-1.7b"
+    TEACHER_NAME="qwen3-8b"
+    DATA_DIR="${QWEN3_DATA_DIR:-${ROOT}/processed_data/ultraInteract/Qwen/Qwen3-8B}"
+    DATASET_MANIFEST="${QWEN3_DATASET_MANIFEST:-${DATA_DIR}/dataset_contract.json}"
     ;;
   *) echo "Unknown pair: ${PAIR}" >&2; exit 2 ;;
 esac
