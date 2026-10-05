@@ -1,8 +1,8 @@
 # CST ablations on 6 x H200
 
-The default study uses Qwen, full exact-matched data, seeds 10 and 42, the
-same output-KD objective and optimizer as the main CST run, and all eight
-lm-eval tasks. The main configuration is `q=2`, gamma range `[1e-2,1e2]`,
+The default study uses Qwen, full exact-matched data, seeds 10 and 42, and all
+eight lm-eval tasks. Every structural objective retains the adaptive output-KD
+objective. The main CST configuration is `q=2`, gamma range `[1e-2,1e2]`,
 log-uniform random sampling, four supervised layers, and 64 response tokens.
 
 ## Tables
@@ -22,10 +22,9 @@ projector because widths differ. Gram, CKA, spectrum baselines, and CST are
 projector-free. Eigendecomposition is used only by the two spectrum baselines,
 never by CST.
 
-The auxiliary weight defaults to `0.003`. Because objective scales differ, the
-objective table is a fixed-weight controlled comparison, not a claim that each
-baseline has been optimally tuned. Override `AUX_WEIGHT` only if applying the
-same declared tuning protocol to every objective.
+The auxiliary weight is `1.0` for Hidden MSE, token-Gram MSE, CKA, normalized
+spectrum, and direct spectrum. CST retains its `0.003` weight. Override
+`AUX_WEIGHT` only when intentionally changing this protocol.
 
 ## Run
 

@@ -27,11 +27,14 @@ TASKS = {
 METRIC_PRIORITY = {
     "gsm8k": ("exact_match,flexible-extract", "exact_match,strict-match", "exact_match"),
     "gsm_plus": ("exact_match,flexible-extract", "exact_match,strict-match", "exact_match"),
-    "minerva_math": ("exact_match,none", "exact_match", "math_verify,none", "math_verify"),
+    "minerva_math": ("math_verify,none", "math_verify", "exact_match,none", "exact_match"),
     "mbpp": ("pass_at_1,none", "pass_at_1", "exact_match,none", "exact_match"),
     "sciq": ("acc_norm,none", "acc_norm", "acc,none", "acc"),
     "mmlu_stem": ("acc,none", "acc"),
-    "mmlu_pro_math": ("acc,none", "acc"),
+    "mmlu_pro_math": (
+        "exact_match,custom-extract", "exact_match,flexible-extract",
+        "acc,none", "acc", "exact_match,none", "exact_match",
+    ),
     "bbh_cot_fewshot": ("exact_match,flexible-extract", "exact_match,none", "exact_match"),
 }
 

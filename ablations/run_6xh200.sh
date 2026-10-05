@@ -57,6 +57,8 @@ PY
 train_config() {
   local name="$1" variant="$2" q="$3" gmin="$4" gmax="$5" sampling="$6" grid="$7" layers="$8" tokens="$9" seed="${10}"
   local out="${RESULT_ROOT}/${PAIR}/${name}/seed${seed}"
+  local default_aux_weight="1.0"
+  [[ "${variant}" == cst ]] && default_aux_weight="0.003"
   if [[ "${name}" == cst_main && "${REUSE_MAIN_CST}" == 1 ]]; then
     local source="${MAIN_RESULT_ROOT:-${ROOT}/results/reproduce_tables}/${PAIR}/cst/seed${seed}"
     [[ -f "${source}/TRAINING_COMPLETE" ]] || { echo "Missing reusable main CST run: ${source}" >&2; exit 6; }
@@ -69,7 +71,7 @@ train_config() {
   RUN_NAME="${name}" RESULT_ROOT="${RESULT_ROOT}" RUN_GPUS="${GPU_CSV}" \
   CST_NUM_GAMMA="${q}" CST_GAMMA_MIN="${gmin}" CST_GAMMA_MAX="${gmax}" \
   CST_GAMMA_SAMPLING="${sampling}" CST_FIXED_GAMMA_GRID="${grid}" \
-  CST_NUM_LAYERS="${layers}" CST_MAX_TOKENS="${tokens}" AUX_WEIGHT="${AUX_WEIGHT:-0.003}" \
+  CST_NUM_LAYERS="${layers}" CST_MAX_TOKENS="${tokens}" AUX_WEIGHT="${AUX_WEIGHT:-${default_aux_weight}}" \
     bash "${ROOT}/baselines/train_common_6xh200.sh" "${PAIR}" "${variant}" "${seed}"
   latest_checkpoint "${out}" >/dev/null
   touch "${out}/TRAINING_COMPLETE"

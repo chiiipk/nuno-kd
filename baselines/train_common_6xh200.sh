@@ -38,8 +38,7 @@ case "${METHOD}" in
   gkd)             DISTILL_TYPE=jsd-mixed;     KD_RATIO=1.0; STUDENT_GEN=1 ;;
   csd)             DISTILL_TYPE=csd;           KD_RATIO=1.0; STUDENT_GEN=0 ;;
   amid)            DISTILL_TYPE=amid;          KD_RATIO=1.0; STUDENT_GEN=0 ;;
-  cst)             DISTILL_TYPE=adaptive-sfkl; KD_RATIO=1.0; STUDENT_GEN=1 ;;
-  hidden_mse|gram|cka|normalized_spectrum|direct_spectrum)
+  cst|hidden_mse|gram|cka|normalized_spectrum|direct_spectrum)
                     DISTILL_TYPE=adaptive-sfkl; KD_RATIO=1.0; STUDENT_GEN=1 ;;
   *)
     echo "train_common supports: seqkd supervised_kd distillm gkd csd amid cst" >&2
@@ -91,7 +90,11 @@ if [[ "${STUDENT_GEN}" == 1 ]]; then
 fi
 
 if [[ "${METHOD}" == cst || "${METHOD}" == hidden_mse || "${METHOD}" == gram || "${METHOD}" == cka || "${METHOD}" == normalized_spectrum || "${METHOD}" == direct_spectrum ]]; then
-  AUX_WEIGHT="${AUX_WEIGHT:-${CST_LOSS_WEIGHT:-0.003}}"
+  if [[ "${METHOD}" == cst ]]; then
+    AUX_WEIGHT="${AUX_WEIGHT:-${CST_LOSS_WEIGHT:-0.003}}"
+  else
+    AUX_WEIGHT="${AUX_WEIGHT:-1.0}"
+  fi
   CMD+=(--nnm --loss-variant "${METHOD}" --cst-loss-weight "${AUX_WEIGHT}"
     --nnm-ratio "${AUX_WEIGHT}"
     --nnm-warmup-steps 100 --nnm-ramp-steps 200

@@ -28,6 +28,7 @@ on six ranks cannot produce exactly 64; disclose this deviation.
 | GKD | parent trainer's on-policy mixed-JSD path |
 | CSD / AMiD | corresponding loss ports in the parent trainer |
 | CST | multi-scale LogDet objective, weight 0.003 |
+| Hidden MSE / Gram / CKA / normalized spectrum / direct spectrum | structural objectives, weight 1.0 |
 
 GKD, CSD, and AMiD are controlled ports, not necessarily byte-identical
 official launches. A shared budget/evaluator does not establish algorithmic

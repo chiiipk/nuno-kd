@@ -487,15 +487,25 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
             else:
                 lm_loss = loss_func(logits.float().view(-1, logits.shape[-1]), no_model_batch["label"].view(-1))
 
-            if teacher_model is not None:
+            # Structural-only baselines use the teacher's hidden states but do
+            # not use an output-level KD objective. Avoid computing a
+            # distillation loss that would only be multiplied by zero.
+            distil_loss = torch.tensor(0.0, device=device)
+            teacher_outputs = None
+            if teacher_model is not None and (args.kd_ratio > 0.0 or use_nnm):
                 with torch.no_grad():
                     teacher_model.eval()
                     teacher_outputs = teacher_model(
                         **model_batch, output_hidden_states=use_nnm, use_cache=False
                     )
+                if args.kd_ratio > 0.0:
                     teacher_logits = teacher_outputs.logits
-                distil_loss = get_distil_loss(args, teacher_logits, no_model_batch, logits, epoch)
-                loss = (1 - args.kd_ratio) * lm_loss + args.kd_ratio * distil_loss
+                    distil_loss = get_distil_loss(
+                        args, teacher_logits, no_model_batch, logits, epoch
+                    )
+                    loss = (1 - args.kd_ratio) * lm_loss + args.kd_ratio * distil_loss
+                else:
+                    loss = lm_loss
             else:
                 loss = lm_loss
 

@@ -7,7 +7,10 @@ generates CSV, LaTeX, and JSON reports.
 
 NuNo, TSD-KD, and RPT are excluded. No ablation uses teacher centroids. Hidden
 MSE alone has a learned width-matching projector; Gram, CKA, normalized/direct
-spectrum, and CST are projector-free.
+spectrum, and CST are projector-free. All six structural objectives retain
+adaptive output KD in the reproduction launcher.
+All structural objectives except CST use auxiliary weight `1.0`; CST retains
+weight `0.003`.
 
 ## 1. Required data
 
