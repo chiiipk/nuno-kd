@@ -8,7 +8,7 @@
 - `remote_path`: `/nvme/annp36-home/work/CST`, chosen by the user on 2026-10-06. Its previous contents (the separate CST ablation project) were removed at the user's request; a backup without virtual environments is at `/nvme/annp36-home/backups/CST-before-nuno-kd-20261006T073338Z.tar.gz`. Never deploy this repository into the existing `ORBIT-KD` directory.
 - `source_revision`: executable implementation commit `fabb04af3ad5a532c1a37b3a803d71699716cf25` on `main`; deployed checkout is branch `qwen25-tsd-structural` at `750129c` (descendant of it). Later plan-only or `.gitignore` commits may be checked out too, but the executable files must match the hashes below.
 - `source_hashes`:
-  - `configs/qwen25_tsd_structural.yaml`: `41f4f23e61b3d5c711b58369c098e27544efb0f2eeee140fd6ae3f14bde5f007` (single-seed revision of 2026-10-06; the original two-seed file at `fabb04a` hashed `731491a1d3ebca05c00ec8dd75235b8b1b95aad37a263b9a2506a6c3b09a0bcc`).
+  - `configs/qwen25_tsd_structural.yaml`: `e9c18801749c131aaf83b447f15e074566b435fae57773e8886192014874ea86` (four-method single-seed revision of 2026-10-06; the six-method single-seed revision hashed `41f4f23e61b3d5c711b58369c098e27544efb0f2eeee140fd6ae3f14bde5f007`; the original two-seed file at `fabb04a` hashed `731491a1d3ebca05c00ec8dd75235b8b1b95aad37a263b9a2506a6c3b09a0bcc`).
   - `scripts/run_qwen25_tsd_structural.sh`: `573a31a2327baa54cdadc82446883a603ada4702801c63888054d3305003eba7`.
   - `baselines/eval_lm_harness.py`: `4a66eb3712bcc339e29f18838443875da338fd6109046a0cf6cd74e7a5387b1a` (BBH `get-answer` fallback of 2026-10-06; the file at `fabb04a` hashed `4316a091680eb274dcd2773399af31bed856c7d9361536ec9c17225f5e95e4fe`).
   - `finetune.py`: `8cfb7d7facbf03b0190af2f3f2b4ef95f05fe4190865dc73202d35221f6c4834`.
@@ -21,7 +21,7 @@
 - `timezone`: `Asia/Ho_Chi_Minh`.
 - `max_runtime`: none set; run to completion under the health monitor.
 - `execution_policy`: one sequential DDP training job at a time. Each job uses all eight H200 GPUs. Do not overlap methods or seeds.
-- `job_order`: seed `10` only, one run per method: `hidden_mse`, `gram`, `cka`, `normalized_spectrum`, `direct_spectrum`, `cst`; evaluation follows training and the table report follows complete evaluation.
+- `job_order`: seed `10` only, one run per method: `hidden_mse`, `gram`, `cka`, `direct_spectrum`; evaluation follows training and the table report follows complete evaluation.
 
 # Data
 
@@ -43,7 +43,7 @@
 - `student_revision`: `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`.
 - `model_paths`: pin each model with `snapshot_download` in the project virtual environment, record the returned local snapshot directories in `logs/qwen25_tsd_structural_20261005_model_paths.json`, and create a server-only runtime YAML that replaces Hub IDs with those snapshot paths before offline execution.
 - `task`: causal-LM knowledge distillation with adaptive skew-forward output KD plus one structural hidden-state auxiliary objective.
-- `methods`: `hidden_mse`, `gram`, `cka`, `normalized_spectrum`, `direct_spectrum`, and `cst`.
+- `methods`: `hidden_mse`, `gram`, `cka`, and `direct_spectrum`.
 - `output_kd`: enabled for every method; `adaptive-sfkl`, ratio `1.0`, skew alpha `0.1`, student generation enabled.
 - `auxiliary_weights`: `1.0` for Hidden MSE, Gram, CKA, normalized spectrum, and direct spectrum; `0.003` for CST.
 - `seeds`: `10` only (single seed, user decision 2026-10-06).
@@ -99,7 +99,7 @@ ssh vt-admin 'cd /nvme/annp36-home/work/CST && find "$PWD" -type f -name "._*" -
 ssh vt-admin 'cd /nvme/annp36-home/work/CST && nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader && nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw --format=csv,noheader && df -h . /dev/shm && free -g'
 ```
 
-Acceptance for this gate: exactly eight H200 GPUs; none owned or occupied by another user/process; sufficient disk for two model snapshots, dataset/cache, six final runs (two epoch checkpoints each), raw benchmark samples, and logs. If any required GPU is occupied, wait or ask the user; never stop another process.
+Acceptance for this gate: exactly eight H200 GPUs; none owned or occupied by another user/process; sufficient disk for two model snapshots, dataset/cache, four final runs (two epoch checkpoints each), raw benchmark samples, and logs. If any required GPU is occupied, wait or ask the user; never stop another process.
 
 ## 4. Project environment and Hugging Face authentication
 
@@ -247,7 +247,7 @@ echo $! > logs/qwen25_tsd_structural_20261005.pid
 
 ## 9. Terminal verification and report
 
-After the PID exits, require exit code `0`, six valid final checkpoints, eight parseable score files (teacher, student, and 6 trained runs), complete eight-task sample logs, and CSV/JSON/LaTeX tables:
+After the PID exits, require exit code `0`, four valid final checkpoints, six parseable score files (teacher, student, and 4 trained runs), complete eight-task sample logs, and CSV/JSON/LaTeX tables:
 
 ```bash
 cd /nvme/annp36-home/work/CST
@@ -289,7 +289,7 @@ Create or update `run-outputs/out_qwen25-tsd-structural-20261005.md` with the re
 - Exactly eight free H200 GPUs are used by one DDP training job at a time; no silent fallback and no concurrent methods/seeds.
 - Every method uses output-KD ratio `1.0`; auxiliary weights are `1.0` except CST `0.003`.
 - Every run records two epochs, seed, LR `5e-6`, microbatch `1`, gradient accumulation `10`, global batch `80`, and the declared objective in `args.json` and logs.
-- All six method runs (seed `10`) exit successfully and have a complete final checkpoint.
+- All four method runs (seed `10`) exit successfully and have a complete final checkpoint.
 - Teacher, base student, and every trained checkpoint have all eight benchmark scores with non-empty raw samples. Benchmark metrics are used only for reporting.
 - Every loss and reported metric is finite; no traceback, CUDA/host OOM, NCCL failure, worker death, or disk-full error. Any occurrence fails the gate and is documented rather than silently retried.
 - The final table has no missing dataset cell. With one seed, `report_mean_std.py` writes the seed-10 value as the mean and `sample_std` 0.0; that 0.0 is not a variance estimate and must be reported as single-seed, without ± error bars.
@@ -302,3 +302,4 @@ Create or update `run-outputs/out_qwen25-tsd-structural-20261005.md` with the re
 - `2026-10-06`: `remote_path` changed from `/nvme/annp36-home/work/nuno-kd` to `/nvme/annp36-home/work/CST` at the user's request (old CST contents removed after a backup); `local_path` set to this Mac's checkout; deployment clones branch `qwen25-tsd-structural`; `uv` is not on the server PATH, so step 4 calls `/nvme/annp36-home/.uvboot/bin/uv` with caches on `/nvme`. Data, models, seeds, batch, objectives and hyperparameters are unchanged.
 - `2026-10-06`: seeds reduced from `10`, `42` to `10` only at the user's explicit request (`training.seeds: [10]` in the YAML, new hash above; watcher `SEEDS=(10)`). The sweep is now 6 training runs and 8 evaluated models; results are single-seed with no seed variance. All other data, objectives, batch and hyperparameters are unchanged.
 - `2026-10-06`: the online smoke gate failed with `KeyError: No supported metric found for bbh_cot_fewshot`, because lm-eval `6d64254` reports only `exact_match,get-answer` (regex `the answer is …`) for that group. With the user's approval, `baselines/eval_lm_harness.py` adds `exact_match,get-answer` after `exact_match,flexible-extract` in the BBH metric priority (new hash above); the BBH-COT headline is therefore `get-answer`. No other task, decoding setting or training setting changed.
+- `2026-10-06`: at the user's request the first launch (started 15:14 giờ Việt Nam) was stopped at about 16:07 giờ Việt Nam while `hidden_mse/seed10` was near step 1010/1992 (dev loss rose 0.305 → 0.721 after epoch 1, so adaptive student generation had switched on and step time rose from ~2.6 s to 6–9 s). No run completed; the partial `results/qwen25_tsd_structural/hidden_mse/seed10/` (epoch-1 checkpoint `996`) is kept on the server and must be removed or moved before relaunch. Separately, at the user's explicit request `normalized_spectrum` and `cst` were removed from `training.methods` (new YAML hash above; watcher `METHODS` updated); their `training.auxiliary` weights stay in the YAML because the launcher reads every weight key. The sweep is now 4 training runs and 6 evaluated models. Objective (`adaptive-sfkl` with student generation), data, seed, batch and hyperparameters are unchanged.

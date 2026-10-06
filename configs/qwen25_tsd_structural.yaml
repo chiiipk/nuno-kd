@@ -40,9 +40,7 @@ training:
     - hidden_mse
     - gram
     - cka
-    - normalized_spectrum
     - direct_spectrum
-    - cst
   epochs: 2
   learning_rate: 5.0e-6
   min_learning_rate: 0.0

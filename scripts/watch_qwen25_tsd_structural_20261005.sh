@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ID=qwen25_tsd_structural_20261005
 INTERVAL="${INTERVAL:-30}"
-METHODS=(hidden_mse gram cka normalized_spectrum direct_spectrum cst)
+METHODS=(hidden_mse gram cka direct_spectrum)
 SEEDS=(10)
 TOTAL_RUNS=$(( ${#METHODS[@]} * ${#SEEDS[@]} ))
 TOTAL_EVALS=$(( TOTAL_RUNS + 2 ))
