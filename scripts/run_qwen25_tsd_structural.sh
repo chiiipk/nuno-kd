@@ -108,6 +108,8 @@ mapping = {
 }
 for shell_name, yaml_path in mapping.items():
     emit(shell_name, get(yaml_path))
+# Optional: "<method>/seed<seed>: <global step>" for runs continued from an epoch checkpoint.
+emit("RESUME_SPEC", [f"{run}:{step}" for run, step in (cfg["training"].get("resume") or {}).items()])
 PY
 )" || die "Could not parse YAML config: ${CONFIG}"
 eval "${CONFIG_EXPORTS}"
@@ -138,7 +140,11 @@ WORLD_SIZE="${#GPU_LIST[@]}"
 
 [[ "${OUTPUT_KD_ENABLED}" == 1 ]] || die "This protocol requires output_kd.enabled=true"
 [[ "${KD_RATIO}" == "1.0" || "${KD_RATIO}" == "1" ]] || die "This protocol requires output_kd.ratio=1"
-[[ "${STUDENT_GENERATION}" == 1 ]] || die "adaptive output KD requires student_generation=true"
+if [[ "${DISTILL_TYPE}" == adaptive-* ]]; then
+  [[ "${STUDENT_GENERATION}" == 1 ]] || die "adaptive output KD requires student_generation=true"
+else
+  [[ "${STUDENT_GENERATION}" == 0 ]] || die "student_generation=true requires an adaptive output KD type"
+fi
 [[ "${WORLD_SIZE}" -gt 0 ]] || die "resources.gpus is empty"
 [[ -f "${DEEPSPEED_CONFIG}" ]] || die "DeepSpeed config not found: ${DEEPSPEED_CONFIG}"
 
@@ -156,6 +162,17 @@ method_weight() {
     cst) echo "${WEIGHT_CST}" ;;
     *) die "Unsupported method in YAML: $1" ;;
   esac
+}
+
+resume_step_for() {
+  local entry
+  for entry in ${RESUME_SPEC//,/ }; do
+    if [[ "${entry%%:*}" == "$1" ]]; then
+      echo "${entry##*:}"
+      return 0
+    fi
+  done
+  return 0
 }
 
 sha256_file() {
@@ -301,9 +318,6 @@ train_one() {
     --deepspeed --deepspeed_config "${DEEPSPEED_CONFIG}"
     --type "${DISTILL_TYPE}" --skew-alpha "${SKEW_ALPHA}"
     --do-sample --top-k 0 --top-p 1.0
-    --student-gen --gen-num-beams 1 --gen-top-p 1.0
-    --init-threshold 0.0 --loss-eps 0.1 --capacity 1000
-    --replay-ratio decreasing --mixed-alpha 0.5
     --nnm --loss-variant "${method}"
     --nnm-ratio "${aux_weight}"
     --cst-loss-weight "${aux_weight}"
@@ -319,6 +333,25 @@ train_one() {
     --cst-gamma-sampling "${CST_GAMMA_SAMPLING}"
     --cst-distance "${CST_DISTANCE}")
   [[ "${TEACHER_FP16}" == 1 ]] && cmd+=(--teacher-model-fp16)
+  if [[ "${STUDENT_GENERATION}" == 1 ]]; then
+    cmd+=(--student-gen --gen-num-beams 1 --gen-top-p 1.0
+      --init-threshold 0.0 --loss-eps 0.1 --capacity 1000
+      --replay-ratio decreasing --mixed-alpha 0.5)
+  fi
+
+  local resume_step archive name
+  resume_step="$(resume_step_for "${method}/seed${seed}")"
+  if [[ -n "${resume_step}" ]]; then
+    [[ -f "${run_dir}/${resume_step}/pytorch_model.bin" ]] || \
+      die "Resume checkpoint missing: ${run_dir}/${resume_step}/pytorch_model.bin"
+    cmd+=(--resume-ckpt "${run_dir}/${resume_step}" --resume-global-step "${resume_step}")
+    # Keep the interrupted attempt's logs; tee and finetune.py rewrite them.
+    archive="${run_dir}/pre_resume_$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -p "${archive}"
+    for name in train.log log.txt args.json; do
+      if [[ -f "${run_dir}/${name}" ]]; then mv "${run_dir}/${name}" "${archive}/"; fi
+    done
+  fi
 
   {
     echo "method=${method} seed=${seed} output_kd_ratio=${KD_RATIO} auxiliary_weight=${aux_weight}"

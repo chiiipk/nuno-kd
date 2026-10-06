@@ -297,6 +297,22 @@ def attach_nnm_projectors(student_model, n_student_layers, d_s, d_t, s_mid, devi
     return projectors
 
 
+def load_resume_weights(args, model):
+    """Load student weights (and projectors) from an epoch checkpoint.
+
+    The checkpoint holds bf16 module weights only: AdamW moments and the fp32
+    master copy were never saved, so the optimizer restarts from zero moments.
+    """
+    path = os.path.join(args.resume_ckpt, "pytorch_model.bin")
+    state = torch.load(path, map_location="cpu", mmap=True, weights_only=True)
+    # Match the checkpoint dtype so no value is rounded through fp16.
+    model.to(torch.bfloat16)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing or unexpected:
+        raise RuntimeError(f"resume checkpoint mismatch: missing={missing}, unexpected={unexpected}")
+    print_rank(f"[RESUME] loaded {len(state)} tensors from {path}")
+
+
 def get_unwrapped_student(model):
     """Strip DeepSpeed / DDP wrappers to access HuggingFace model + projectors."""
     m = model
@@ -361,6 +377,18 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
     student_generator = SampleGenerator(args, tokenizer)
 
     step, global_step = 1, 1
+    start_epoch = 0
+    if args.resume_ckpt:
+        # Start the next epoch with the counters, LR schedule position and
+        # sampler epoch an uninterrupted run would have at that point.
+        start_epoch = args.resume_global_step // args.train_iters_per_epoch
+        skipped_micro_steps = start_epoch * len(train_dataloader)
+        step = 1 + skipped_micro_steps
+        global_step = 1 + step // args.gradient_accumulation_steps
+        for _ in range(skipped_micro_steps // args.gradient_accumulation_steps):
+            lr_scheduler.step()
+        print_rank(f"[RESUME] epoch {start_epoch} | step {step} | global step {global_step} | "
+                   f"lr {lr_scheduler.get_last_lr()[0]:.4e}")
     # ═══ NNM: extra running stat ═══
     total_loss, total_distil_loss, total_nnm_loss, total_time = 0.0, 0.0, 0.0, 0.0
 
@@ -404,7 +432,7 @@ def finetune(args, tokenizer: AutoTokenizer, model: deepspeed.DeepSpeedEngine, o
         print_rank(f"[NNM] schedule: warmup={warmup_s} steps, "
                    f"ramp={ramp_s} steps, target_ratio={representation_weight}")
 
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
 
         model.train()
@@ -1027,6 +1055,13 @@ def main():
             raise ValueError("NNM requires --teacher_model_path")
         nnm_state = prepare_nnm(args, tokenizer, model, teacher_model,
                                 dataset, device)
+
+    if args.resume_ckpt:
+        if not args.do_train or args.resume_global_step <= 0 or \
+                args.resume_global_step % args.train_iters_per_epoch:
+            raise ValueError("--resume-global-step must be a positive epoch boundary "
+                             f"(multiple of {args.train_iters_per_epoch})")
+        load_resume_weights(args, model)
 
     model, optimizer, lr_scheduler = setup_model_and_optimizer(args, model, ds_config, device, set_optim=args.do_train)
 

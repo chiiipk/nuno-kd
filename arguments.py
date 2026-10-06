@@ -57,6 +57,10 @@ def add_runtime_args(parser: argparse.ArgumentParser):
                        help='Path to a directory containing a model checkpoint.')
     group.add_argument('--save', type=str, default=None,
                        help='Output directory to save checkpoints to.')
+    group.add_argument("--resume-ckpt", type=str, default=None,
+                       help="Epoch-boundary checkpoint saved by finetune.py; restores weights only.")
+    group.add_argument("--resume-global-step", type=int, default=0,
+                       help="Global step at which --resume-ckpt was saved (an epoch boundary).")
     group.add_argument("--log-interval", type=int, default=10)
     group.add_argument("--mid-log-num", type=int, default=4)
     group.add_argument('--save-interval', type=int, default=1000,

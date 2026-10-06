@@ -1,17 +1,18 @@
 # Project
 
-- `status`: planned; not launched. Training may start only after every preflight gate below passes.
+- `status`: first launch stopped on 2026-10-06 at the user's request; relaunch is set up but not started. Training may start only after every preflight gate below passes and the user gives the go-ahead.
 - `name`: Qwen2.5 structural hidden-state distillation on TSD-KD generations.
 - `run_id`: `qwen25_tsd_structural_20261005`.
 - `local_path`: `/Users/savoxism/Documents/GitHub/nuno-kd`.
 - `ssh_host`: `vt-admin` (HGX47, user `vt_admin`); SSH gate passed on 2026-10-06.
 - `remote_path`: `/nvme/annp36-home/work/CST`, chosen by the user on 2026-10-06. Its previous contents (the separate CST ablation project) were removed at the user's request; a backup without virtual environments is at `/nvme/annp36-home/backups/CST-before-nuno-kd-20261006T073338Z.tar.gz`. Never deploy this repository into the existing `ORBIT-KD` directory.
-- `source_revision`: executable implementation commit `fabb04af3ad5a532c1a37b3a803d71699716cf25` on `main`; deployed checkout is branch `qwen25-tsd-structural` at `750129c` (descendant of it). Later plan-only or `.gitignore` commits may be checked out too, but the executable files must match the hashes below.
+- `source_revision`: executable implementation commit `fabb04af3ad5a532c1a37b3a803d71699716cf25` on `main`; deployed checkout is branch `qwen25-tsd-structural` (a descendant of it). The executable files must match the hashes below.
 - `source_hashes`:
-  - `configs/qwen25_tsd_structural.yaml`: `e9c18801749c131aaf83b447f15e074566b435fae57773e8886192014874ea86` (four-method single-seed revision of 2026-10-06; the six-method single-seed revision hashed `41f4f23e61b3d5c711b58369c098e27544efb0f2eeee140fd6ae3f14bde5f007`; the original two-seed file at `fabb04a` hashed `731491a1d3ebca05c00ec8dd75235b8b1b95aad37a263b9a2506a6c3b09a0bcc`).
-  - `scripts/run_qwen25_tsd_structural.sh`: `573a31a2327baa54cdadc82446883a603ada4702801c63888054d3305003eba7`.
+  - `configs/qwen25_tsd_structural.yaml`: `d1676dd38279c7f0cb80d69ea23e2050581f50beea342cf4595eb4cc094d8006` (four-method, single-seed, `sfkl` without student generation, `hidden_mse/seed10` resume; revision of 2026-10-06; the four-method adaptive revision hashed `e9c18801749c131aaf83b447f15e074566b435fae57773e8886192014874ea86`; the six-method single-seed revision hashed `41f4f23e61b3d5c711b58369c098e27544efb0f2eeee140fd6ae3f14bde5f007`; the original two-seed file at `fabb04a` hashed `731491a1d3ebca05c00ec8dd75235b8b1b95aad37a263b9a2506a6c3b09a0bcc`).
+  - `scripts/run_qwen25_tsd_structural.sh`: `e6bf040ca8674a329f030cbd90839c3a1f8cfe7e47c488d6e2177bf886dcb74b` (student-generation flags only for adaptive types, optional `training.resume`; the file at `fabb04a` hashed `573a31a2327baa54cdadc82446883a603ada4702801c63888054d3305003eba7`).
   - `baselines/eval_lm_harness.py`: `4a66eb3712bcc339e29f18838443875da338fd6109046a0cf6cd74e7a5387b1a` (BBH `get-answer` fallback of 2026-10-06; the file at `fabb04a` hashed `4316a091680eb274dcd2773399af31bed856c7d9361536ec9c17225f5e95e4fe`).
-  - `finetune.py`: `8cfb7d7facbf03b0190af2f3f2b4ef95f05fe4190865dc73202d35221f6c4834`.
+  - `finetune.py`: `d40f75ec9f70f4d2bfb3c4d329e919e2cf04678129ed3cf722ad2ceb5c788e94` (weights-only epoch resume; the file at `fabb04a` hashed `8cfb7d7facbf03b0190af2f3f2b4ef95f05fe4190865dc73202d35221f6c4834`).
+  - `arguments.py`: `8b7bbc6a866b7b82ff6918183b3d1f0f3689517ef7ff6a8045fb80320938cb7d` (adds `--resume-ckpt`, `--resume-global-step`; previously `57f5038477a63a0fbb9a6a2d389b39bee15a20259ef1fd0aed7abbcc8e626a0a`).
 - `authoritative_input`: `run-inputs/qwen25-tsd-structural-20261005.md`.
 - `terminal_report`: `run-outputs/out_qwen25-tsd-structural-20261005.md`; create or update it after terminal success or failure, before reporting completion.
 
@@ -42,10 +43,11 @@
 - `student_repo_id`: `Qwen/Qwen2.5-1.5B-Instruct`.
 - `student_revision`: `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`.
 - `model_paths`: pin each model with `snapshot_download` in the project virtual environment, record the returned local snapshot directories in `logs/qwen25_tsd_structural_20261005_model_paths.json`, and create a server-only runtime YAML that replaces Hub IDs with those snapshot paths before offline execution.
-- `task`: causal-LM knowledge distillation with adaptive skew-forward output KD plus one structural hidden-state auxiliary objective.
+- `task`: causal-LM knowledge distillation with off-policy skew-forward KL output KD (dataset responses only, no student generation) plus one structural hidden-state auxiliary objective.
 - `methods`: `hidden_mse`, `gram`, `cka`, and `direct_spectrum`.
-- `output_kd`: enabled for every method; `adaptive-sfkl`, ratio `1.0`, skew alpha `0.1`, student generation enabled.
-- `auxiliary_weights`: `1.0` for Hidden MSE, Gram, CKA, normalized spectrum, and direct spectrum; `0.003` for CST.
+- `output_kd`: enabled for every method; `sfkl`, ratio `1.0`, skew alpha `0.1`, student generation disabled (no `--student-gen`, no replay buffer).
+- `auxiliary_weights`: `1.0` for Hidden MSE, Gram, CKA, and direct spectrum. The YAML still holds normalized spectrum `1.0` and CST `0.003` because the launcher reads every weight key; they are unused.
+- `resume`: `hidden_mse/seed10` continues from its epoch-1 checkpoint `results/qwen25_tsd_structural/hidden_mse/seed10/996` (student weights and the four learned projectors; no optimizer state exists). The other three methods train from scratch.
 - `seeds`: `10` only (single seed, user decision 2026-10-06).
 - `epochs`: `2`.
 - `optimizer`: AdamW, learning rate `5e-6`, weight decay `1e-2`, cosine schedule, LR warmup ratio `0.1`, gradient clip `1.0`.
@@ -90,7 +92,7 @@ ssh vt-admin 'if test -d /nvme/annp36-home/work/CST/.git; then cd /nvme/annp36-h
 If the remote tree is dirty, stop and report it; do not reset or overwrite it. Then remove AppleDouble files only inside the resolved project root and verify source hashes:
 
 ```bash
-ssh vt-admin 'cd /nvme/annp36-home/work/CST && find "$PWD" -type f -name "._*" -print -delete && git merge-base --is-ancestor fabb04af3ad5a532c1a37b3a803d71699716cf25 HEAD && sha256sum configs/qwen25_tsd_structural.yaml scripts/run_qwen25_tsd_structural.sh baselines/eval_lm_harness.py finetune.py'
+ssh vt-admin 'cd /nvme/annp36-home/work/CST && find "$PWD" -type f -name "._*" -print -delete && git merge-base --is-ancestor fabb04af3ad5a532c1a37b3a803d71699716cf25 HEAD && sha256sum configs/qwen25_tsd_structural.yaml scripts/run_qwen25_tsd_structural.sh baselines/eval_lm_harness.py finetune.py arguments.py'
 ```
 
 ## 3. Hardware and process gate
@@ -239,6 +241,7 @@ echo $! > logs/qwen25_tsd_structural_20261005.pid
 - Every 20 minutes, read only: PID/exit state; current method/seed/phase; optimizer step; finite loss and gradient; newest log/checkpoint timestamp; disk; and every GPU's owner, utilization, VRAM, temperature, and power.
 - Scan logs for `Traceback`, `CUDA out of memory`, `NCCL`, `nan`, `inf`, killed workers, and disk-full errors. One idle sample is not a stall.
 - Before launch, create `scripts/watch_qwen25_tsd_structural_20261005.sh` on the remote project. It must refresh every 30 seconds, display phase, method, seed, progress, latest loss/LR, elapsed time, ETA when derivable, PID/exit state, and all eight GPU health rows. `Ctrl-C` stops only the watcher.
+- Resume gate for `hidden_mse/seed10`: its new `train.log` must show `[RESUME] loaded 343 tensors`, then `[RESUME] epoch 1 | step 9969 | global step 997 | lr 2.9336e-06`, then a first `dev | avg_loss` within `0.005` of `0.72125` (the pre-stop epoch-1 value), and the first training log line at `global iter: 1000`. Any mismatch stops the chain for diagnosis. The interrupted attempt's `train.log`, `log.txt` and `args.json` are moved to `pre_resume_<UTC timestamp>/` in the run directory by the launcher.
 - Direct watcher command:
 
   ```bash
@@ -287,7 +290,7 @@ Create or update `run-outputs/out_qwen25-tsd-structural-20261005.md` with the re
 - The executable source hashes match the pinned implementation revision.
 - Environment setup, Hugging Face authentication, exact dataset checksum/count, processed-data contract, pinned model snapshots, evaluator commit, online cache warmup, and offline smoke evaluation all pass before training.
 - Exactly eight free H200 GPUs are used by one DDP training job at a time; no silent fallback and no concurrent methods/seeds.
-- Every method uses output-KD ratio `1.0`; auxiliary weights are `1.0` except CST `0.003`.
+- Every method uses `sfkl` output KD with ratio `1.0` and no student generation; every auxiliary weight is `1.0`.
 - Every run records two epochs, seed, LR `5e-6`, microbatch `1`, gradient accumulation `10`, global batch `80`, and the declared objective in `args.json` and logs.
 - All four method runs (seed `10`) exit successfully and have a complete final checkpoint.
 - Teacher, base student, and every trained checkpoint have all eight benchmark scores with non-empty raw samples. Benchmark metrics are used only for reporting.
@@ -303,3 +306,5 @@ Create or update `run-outputs/out_qwen25-tsd-structural-20261005.md` with the re
 - `2026-10-06`: seeds reduced from `10`, `42` to `10` only at the user's explicit request (`training.seeds: [10]` in the YAML, new hash above; watcher `SEEDS=(10)`). The sweep is now 6 training runs and 8 evaluated models; results are single-seed with no seed variance. All other data, objectives, batch and hyperparameters are unchanged.
 - `2026-10-06`: the online smoke gate failed with `KeyError: No supported metric found for bbh_cot_fewshot`, because lm-eval `6d64254` reports only `exact_match,get-answer` (regex `the answer is …`) for that group. With the user's approval, `baselines/eval_lm_harness.py` adds `exact_match,get-answer` after `exact_match,flexible-extract` in the BBH metric priority (new hash above); the BBH-COT headline is therefore `get-answer`. No other task, decoding setting or training setting changed.
 - `2026-10-06`: at the user's request the first launch (started 15:14 giờ Việt Nam) was stopped at about 16:07 giờ Việt Nam while `hidden_mse/seed10` was near step 1010/1992 (dev loss rose 0.305 → 0.721 after epoch 1, so adaptive student generation had switched on and step time rose from ~2.6 s to 6–9 s). No run completed; the partial `results/qwen25_tsd_structural/hidden_mse/seed10/` (epoch-1 checkpoint `996`) is kept on the server and must be removed or moved before relaunch. Separately, at the user's explicit request `normalized_spectrum` and `cst` were removed from `training.methods` (new YAML hash above; watcher `METHODS` updated); their `training.auxiliary` weights stay in the YAML because the launcher reads every weight key. The sweep is now 4 training runs and 6 evaluated models. Objective (`adaptive-sfkl` with student generation), data, seed, batch and hyperparameters are unchanged.
+- `2026-10-06`: at the user's explicit request student generation is removed: `training.output_kd` is now `type: sfkl`, `student_generation: false`. The launcher passes `--student-gen` and the adaptive/replay flags only when `student_generation` is true, and refuses an adaptive type without it or student generation with a non-adaptive type. In `finetune.py` the loss for `sfkl` and `adaptive-sfkl` is the same `skewed_forward_kl`; with `adaptive-sfkl` at threshold `0.0` no batch is generated or replayed, so epoch 1 of the stopped `hidden_mse/seed10` run was already pure off-policy SKL and matches the new objective.
+- `2026-10-06`: also at the user's request, `hidden_mse/seed10` continues from its epoch-1 checkpoint instead of restarting. This supersedes the earlier note that the partial directory must be removed. `finetune.py`/`arguments.py` gain `--resume-ckpt`/`--resume-global-step`. These load the checkpoint's bf16 weights and projectors strictly before DeepSpeed init. They then start at epoch 1 with the uninterrupted run's counters (step 9969, global step 997), sampler epoch 1, and the cosine schedule replayed 996 steps (LR `2.9336e-06`). The YAML's `training.resume` maps `hidden_mse/seed10: 996`. A CPU-only check on the server confirmed four things: the replayed schedule reproduces the stopped run's logged LR at global iters 990/1000/1010 exactly; all 343 tensors load bit-exactly in bf16 with tied embeddings intact; the launcher passes the resume flags only to `hidden_mse/seed10`; and it archives the old logs. Known deviations of the resumed run from an uninterrupted one, to be disclosed in the report: AdamW moments restart from zero; the fp32 master weights were never saved, so training resumes from the bf16 copy; and the checkpoint was written after optimizer step 995, so epoch-1 micro-batches 9951–9968 on each rank (18 × 8 = 144 samples, 0.18% of an epoch) are not trained. Data, seed, batch, LR schedule, precision and GPU allocation are unchanged. Estimated time after launch: about 50 min to finish `hidden_mse`, about 4 h 25 m for the other three runs at the observed ~2.56 s/step, then 5–7.5 h of evaluation for 6 models. That is about 10.5–13 h in total.
