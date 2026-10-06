@@ -35,7 +35,7 @@ METRIC_PRIORITY = {
         "exact_match,custom-extract", "exact_match,flexible-extract",
         "acc,none", "acc", "exact_match,none", "exact_match",
     ),
-    "bbh_cot_fewshot": ("exact_match,flexible-extract", "exact_match,none", "exact_match"),
+    "bbh_cot_fewshot": ("exact_match,flexible-extract", "exact_match,get-answer", "exact_match,none", "exact_match"),
 }
 
 

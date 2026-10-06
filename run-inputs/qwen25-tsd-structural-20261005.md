@@ -10,7 +10,7 @@
 - `source_hashes`:
   - `configs/qwen25_tsd_structural.yaml`: `41f4f23e61b3d5c711b58369c098e27544efb0f2eeee140fd6ae3f14bde5f007` (single-seed revision of 2026-10-06; the original two-seed file at `fabb04a` hashed `731491a1d3ebca05c00ec8dd75235b8b1b95aad37a263b9a2506a6c3b09a0bcc`).
   - `scripts/run_qwen25_tsd_structural.sh`: `573a31a2327baa54cdadc82446883a603ada4702801c63888054d3305003eba7`.
-  - `baselines/eval_lm_harness.py`: `4316a091680eb274dcd2773399af31bed856c7d9361536ec9c17225f5e95e4fe`.
+  - `baselines/eval_lm_harness.py`: `4a66eb3712bcc339e29f18838443875da338fd6109046a0cf6cd74e7a5387b1a` (BBH `get-answer` fallback of 2026-10-06; the file at `fabb04a` hashed `4316a091680eb274dcd2773399af31bed856c7d9361536ec9c17225f5e95e4fe`).
   - `finetune.py`: `8cfb7d7facbf03b0190af2f3f2b4ef95f05fe4190865dc73202d35221f6c4834`.
 - `authoritative_input`: `run-inputs/qwen25-tsd-structural-20261005.md`.
 - `terminal_report`: `run-outputs/out_qwen25-tsd-structural-20261005.md`; create or update it after terminal success or failure, before reporting completion.
@@ -33,7 +33,7 @@
 - `validation`: the processor creates a 200-example in-run sanity set. It overlaps the training collection and must not be reported as an unbiased validation result.
 - `manifest`: `processed_data/tsd_kd_qwen25/Qwen/Qwen2.5-1.5B-Instruct/dataset_contract.json`; its ordered and multiset hashes must match the canonical train file.
 - `benchmarks`: `gsm8k`, `gsm_plus`, `minerva_math`, `mbpp`, `sciq`, `mmlu_stem`, `mmlu_pro_math`, and `bbh_cot_fewshot` through `baselines/eval_lm_harness.py`.
-- `headline_metrics`: GSM flexible extract, GSM-Plus flexible extract, MATH `math_verify`, MBPP pass@1, SciQ normalized accuracy, MMLU-STEM accuracy, MMLU-Pro-Math custom extract, and BBH-COT flexible extract. Scores are multiplied by 100.
+- `headline_metrics`: GSM flexible extract, GSM-Plus flexible extract, MATH `math_verify`, MBPP pass@1, SciQ normalized accuracy, MMLU-STEM accuracy, MMLU-Pro-Math custom extract, and BBH-COT `exact_match,get-answer` (the pinned lm-eval commit defines no flexible-extract filter for `bbh_cot_fewshot`). Scores are multiplied by 100.
 
 # Model
 
@@ -301,3 +301,4 @@ Create or update `run-outputs/out_qwen25-tsd-structural-20261005.md` with the re
 - `2026-10-05`: initial authoritative plan created from the user-approved eight-H200 policy. `ssh_host` and remote project base were taken from the user-provided OrbitKD example; upload is deliberately disabled because no destination was authorized.
 - `2026-10-06`: `remote_path` changed from `/nvme/annp36-home/work/nuno-kd` to `/nvme/annp36-home/work/CST` at the user's request (old CST contents removed after a backup); `local_path` set to this Mac's checkout; deployment clones branch `qwen25-tsd-structural`; `uv` is not on the server PATH, so step 4 calls `/nvme/annp36-home/.uvboot/bin/uv` with caches on `/nvme`. Data, models, seeds, batch, objectives and hyperparameters are unchanged.
 - `2026-10-06`: seeds reduced from `10`, `42` to `10` only at the user's explicit request (`training.seeds: [10]` in the YAML, new hash above; watcher `SEEDS=(10)`). The sweep is now 6 training runs and 8 evaluated models; results are single-seed with no seed variance. All other data, objectives, batch and hyperparameters are unchanged.
+- `2026-10-06`: the online smoke gate failed with `KeyError: No supported metric found for bbh_cot_fewshot`, because lm-eval `6d64254` reports only `exact_match,get-answer` (regex `the answer is …`) for that group. With the user's approval, `baselines/eval_lm_harness.py` adds `exact_match,get-answer` after `exact_match,flexible-extract` in the BBH metric priority (new hash above); the BBH-COT headline is therefore `get-answer`. No other task, decoding setting or training setting changed.
