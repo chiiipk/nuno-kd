@@ -35,7 +35,7 @@ resources:
   dataloader_workers: 4
 
 training:
-  seeds: [10, 42]
+  seeds: [10]
   methods:
     - hidden_mse
     - gram

@@ -3,12 +3,12 @@
 - `status`: planned; not launched. Training may start only after every preflight gate below passes.
 - `name`: Qwen2.5 structural hidden-state distillation on TSD-KD generations.
 - `run_id`: `qwen25_tsd_structural_20261005`.
-- `local_path`: `/Users/skye/Downloads/artifacts/nuno-kd`.
-- `ssh_host`: `vt-admin`, taken from the user-provided OrbitKD example. The alias did not resolve from the current Mac on 2026-10-05, so SSH connectivity is a hard preflight gate rather than an assumed capability.
-- `remote_path`: `/nvme/annp36-home/work/nuno-kd`, using the verified `/nvme/annp36-home/work` project base from the example and a project-specific directory. Never deploy this repository into the existing `ORBIT-KD` directory.
-- `source_revision`: executable implementation commit `fabb04af3ad5a532c1a37b3a803d71699716cf25` on `main`. The later plan-only commit may be checked out too, but the executable files must match the hashes below.
+- `local_path`: `/Users/savoxism/Documents/GitHub/nuno-kd`.
+- `ssh_host`: `vt-admin` (HGX47, user `vt_admin`); SSH gate passed on 2026-10-06.
+- `remote_path`: `/nvme/annp36-home/work/CST`, chosen by the user on 2026-10-06. Its previous contents (the separate CST ablation project) were removed at the user's request; a backup without virtual environments is at `/nvme/annp36-home/backups/CST-before-nuno-kd-20261006T073338Z.tar.gz`. Never deploy this repository into the existing `ORBIT-KD` directory.
+- `source_revision`: executable implementation commit `fabb04af3ad5a532c1a37b3a803d71699716cf25` on `main`; deployed checkout is branch `qwen25-tsd-structural` at `750129c` (descendant of it). Later plan-only or `.gitignore` commits may be checked out too, but the executable files must match the hashes below.
 - `source_hashes`:
-  - `configs/qwen25_tsd_structural.yaml`: `731491a1d3ebca05c00ec8dd75235b8b1b95aad37a263b9a2506a6c3b09a0bcc`.
+  - `configs/qwen25_tsd_structural.yaml`: `41f4f23e61b3d5c711b58369c098e27544efb0f2eeee140fd6ae3f14bde5f007` (single-seed revision of 2026-10-06; the original two-seed file at `fabb04a` hashed `731491a1d3ebca05c00ec8dd75235b8b1b95aad37a263b9a2506a6c3b09a0bcc`).
   - `scripts/run_qwen25_tsd_structural.sh`: `573a31a2327baa54cdadc82446883a603ada4702801c63888054d3305003eba7`.
   - `baselines/eval_lm_harness.py`: `4316a091680eb274dcd2773399af31bed856c7d9361536ec9c17225f5e95e4fe`.
   - `finetune.py`: `8cfb7d7facbf03b0190af2f3f2b4ef95f05fe4190865dc73202d35221f6c4834`.
@@ -21,7 +21,7 @@
 - `timezone`: `Asia/Ho_Chi_Minh`.
 - `max_runtime`: none set; run to completion under the health monitor.
 - `execution_policy`: one sequential DDP training job at a time. Each job uses all eight H200 GPUs. Do not overlap methods or seeds.
-- `job_order`: for seed `10`, then seed `42` within each method: `hidden_mse`, `gram`, `cka`, `normalized_spectrum`, `direct_spectrum`, `cst`; evaluation follows training and the table report follows complete evaluation.
+- `job_order`: seed `10` only, one run per method: `hidden_mse`, `gram`, `cka`, `normalized_spectrum`, `direct_spectrum`, `cst`; evaluation follows training and the table report follows complete evaluation.
 
 # Data
 
@@ -46,7 +46,7 @@
 - `methods`: `hidden_mse`, `gram`, `cka`, `normalized_spectrum`, `direct_spectrum`, and `cst`.
 - `output_kd`: enabled for every method; `adaptive-sfkl`, ratio `1.0`, skew alpha `0.1`, student generation enabled.
 - `auxiliary_weights`: `1.0` for Hidden MSE, Gram, CKA, normalized spectrum, and direct spectrum; `0.003` for CST.
-- `seeds`: `10`, `42`.
+- `seeds`: `10` only (single seed, user decision 2026-10-06).
 - `epochs`: `2`.
 - `optimizer`: AdamW, learning rate `5e-6`, weight decay `1e-2`, cosine schedule, LR warmup ratio `0.1`, gradient clip `1.0`.
 - `sequence`: max length `1024`, max prompt length `512`.
@@ -65,7 +65,7 @@
 Run from the local repository:
 
 ```bash
-cd /Users/skye/Downloads/artifacts/nuno-kd
+cd /Users/savoxism/Documents/GitHub/nuno-kd
 git status --short
 git log -2 --oneline
 git push origin main
@@ -84,30 +84,31 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 vt-admin 'hostname && id && test -d /n
 Deploy without deleting remote files:
 
 ```bash
-ssh vt-admin 'if test -d /nvme/annp36-home/work/nuno-kd/.git; then cd /nvme/annp36-home/work/nuno-kd && test -z "$(git status --porcelain)" && git pull --ff-only origin main; else git clone https://github.com/chiiipk/nuno-kd.git /nvme/annp36-home/work/nuno-kd; fi'
+ssh vt-admin 'if test -d /nvme/annp36-home/work/CST/.git; then cd /nvme/annp36-home/work/CST && test -z "$(git status --porcelain)" && git pull --ff-only; else git clone --branch qwen25-tsd-structural https://github.com/chiiipk/nuno-kd.git /nvme/annp36-home/work/CST; fi'
 ```
 
 If the remote tree is dirty, stop and report it; do not reset or overwrite it. Then remove AppleDouble files only inside the resolved project root and verify source hashes:
 
 ```bash
-ssh vt-admin 'cd /nvme/annp36-home/work/nuno-kd && find "$PWD" -type f -name "._*" -print -delete && git merge-base --is-ancestor fabb04af3ad5a532c1a37b3a803d71699716cf25 HEAD && shasum -a 256 configs/qwen25_tsd_structural.yaml scripts/run_qwen25_tsd_structural.sh baselines/eval_lm_harness.py finetune.py'
+ssh vt-admin 'cd /nvme/annp36-home/work/CST && find "$PWD" -type f -name "._*" -print -delete && git merge-base --is-ancestor fabb04af3ad5a532c1a37b3a803d71699716cf25 HEAD && sha256sum configs/qwen25_tsd_structural.yaml scripts/run_qwen25_tsd_structural.sh baselines/eval_lm_harness.py finetune.py'
 ```
 
 ## 3. Hardware and process gate
 
 ```bash
-ssh vt-admin 'cd /nvme/annp36-home/work/nuno-kd && nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader && nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw --format=csv,noheader && df -h . /dev/shm && free -g'
+ssh vt-admin 'cd /nvme/annp36-home/work/CST && nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader && nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw --format=csv,noheader && df -h . /dev/shm && free -g'
 ```
 
-Acceptance for this gate: exactly eight H200 GPUs; none owned or occupied by another user/process; sufficient disk for two model snapshots, dataset/cache, twelve full checkpoints, raw benchmark samples, and logs. If any required GPU is occupied, wait or ask the user; never stop another process.
+Acceptance for this gate: exactly eight H200 GPUs; none owned or occupied by another user/process; sufficient disk for two model snapshots, dataset/cache, six final runs (two epoch checkpoints each), raw benchmark samples, and logs. If any required GPU is occupied, wait or ask the user; never stop another process.
 
 ## 4. Project environment and Hugging Face authentication
 
 On `vt-admin`:
 
 ```bash
-cd /nvme/annp36-home/work/nuno-kd
-uv sync
+cd /nvme/annp36-home/work/CST
+UV_CACHE_DIR=/nvme/annp36-home/.cache/uv UV_PYTHON_INSTALL_DIR=/nvme/annp36-home/.cache/uv/python \
+  /nvme/annp36-home/.uvboot/bin/uv sync --python 3.10
 source .venv/bin/activate
 set +x
 export HF_HUB_DISABLE_XET=1
@@ -135,7 +136,7 @@ Never print the token and never enable shell tracing.
 Download the pinned raw dataset through the project Python so the subsequent launcher does not use its curl fallback:
 
 ```bash
-cd /nvme/annp36-home/work/nuno-kd
+cd /nvme/annp36-home/work/CST
 source .venv/bin/activate
 export HF_HUB_DISABLE_XET=1
 python - <<'PY'
@@ -211,11 +212,11 @@ baselines/vendor/lm-evaluation-harness/.venv/bin/python baselines/eval_lm_harnes
 Only after all gates pass:
 
 ```bash
-cd /nvme/annp36-home/work/nuno-kd
+cd /nvme/annp36-home/work/CST
 mkdir -p logs run-outputs
 test ! -f logs/qwen25_tsd_structural_20261005.pid || ! kill -0 "$(cat logs/qwen25_tsd_structural_20261005.pid)" 2>/dev/null
 nohup bash -lc '
-  cd /nvme/annp36-home/work/nuno-kd
+  cd /nvme/annp36-home/work/CST
   source .venv/bin/activate
   set +x
   export HF_HUB_DISABLE_XET=1
@@ -241,15 +242,15 @@ echo $! > logs/qwen25_tsd_structural_20261005.pid
 - Direct watcher command:
 
   ```bash
-  ssh -t vt-admin 'cd /nvme/annp36-home/work/nuno-kd && INTERVAL=10 bash scripts/watch_qwen25_tsd_structural_20261005.sh'
+  ssh -t vt-admin 'cd /nvme/annp36-home/work/CST && INTERVAL=10 bash scripts/watch_qwen25_tsd_structural_20261005.sh'
   ```
 
 ## 9. Terminal verification and report
 
-After the PID exits, require exit code `0`, twelve valid final checkpoints, fourteen parseable score files (teacher, student, and 12 trained runs), complete eight-task sample logs, and CSV/JSON/LaTeX tables:
+After the PID exits, require exit code `0`, six valid final checkpoints, eight parseable score files (teacher, student, and 6 trained runs), complete eight-task sample logs, and CSV/JSON/LaTeX tables:
 
 ```bash
-cd /nvme/annp36-home/work/nuno-kd
+cd /nvme/annp36-home/work/CST
 cat logs/qwen25_tsd_structural_20261005.exit
 find results/qwen25_tsd_structural -name config.json -print
 find benchmark_results/qwen25_tsd_structural/qwen25_tsd -name scores.json -print
@@ -262,7 +263,7 @@ Create or update `run-outputs/out_qwen25-tsd-structural-20261005.md` with the re
 
 # Outputs
 
-- `run_root`: `/nvme/annp36-home/work/nuno-kd`.
+- `run_root`: `/nvme/annp36-home/work/CST`.
 - `train_root`: `results/qwen25_tsd_structural/<method>/seed<seed>/`.
 - `checkpoints`: numeric Hugging Face checkpoint directories under each training run; the highest completed epoch checkpoint is final.
 - `eval_root`: `benchmark_results/qwen25_tsd_structural/qwen25_tsd/{teacher,student,<method>}/seed<seed>/`.
@@ -288,13 +289,15 @@ Create or update `run-outputs/out_qwen25-tsd-structural-20261005.md` with the re
 - Exactly eight free H200 GPUs are used by one DDP training job at a time; no silent fallback and no concurrent methods/seeds.
 - Every method uses output-KD ratio `1.0`; auxiliary weights are `1.0` except CST `0.003`.
 - Every run records two epochs, seed, LR `5e-6`, microbatch `1`, gradient accumulation `10`, global batch `80`, and the declared objective in `args.json` and logs.
-- All twelve method/seed runs exit successfully and have a complete final checkpoint. A partial seed set is not averaged.
+- All six method runs (seed `10`) exit successfully and have a complete final checkpoint.
 - Teacher, base student, and every trained checkpoint have all eight benchmark scores with non-empty raw samples. Benchmark metrics are used only for reporting.
 - Every loss and reported metric is finite; no traceback, CUDA/host OOM, NCCL failure, worker death, or disk-full error. Any occurrence fails the gate and is documented rather than silently retried.
-- The final mean ± sample-standard-deviation table is computed across seeds `10` and `42` with no missing dataset cell.
+- The final table has no missing dataset cell. With one seed, `report_mean_std.py` writes the seed-10 value as the mean and `sample_std` 0.0; that 0.0 is not a variance estimate and must be reported as single-seed, without ± error bars.
 - Retry policy: preserve partial artifacts; diagnose first; resume only completed-safe phases. Never change data, seed, batch, objective, sampler, precision, GPU allocation, or hyperparameters without explicit user approval and an update to this same plan's change history.
 - `run-outputs/out_qwen25-tsd-structural-20261005.md` exists in the project repository and reflects the terminal state before completion is declared.
 
 # Change history
 
 - `2026-10-05`: initial authoritative plan created from the user-approved eight-H200 policy. `ssh_host` and remote project base were taken from the user-provided OrbitKD example; upload is deliberately disabled because no destination was authorized.
+- `2026-10-06`: `remote_path` changed from `/nvme/annp36-home/work/nuno-kd` to `/nvme/annp36-home/work/CST` at the user's request (old CST contents removed after a backup); `local_path` set to this Mac's checkout; deployment clones branch `qwen25-tsd-structural`; `uv` is not on the server PATH, so step 4 calls `/nvme/annp36-home/.uvboot/bin/uv` with caches on `/nvme`. Data, models, seeds, batch, objectives and hyperparameters are unchanged.
+- `2026-10-06`: seeds reduced from `10`, `42` to `10` only at the user's explicit request (`training.seeds: [10]` in the YAML, new hash above; watcher `SEEDS=(10)`). The sweep is now 6 training runs and 8 evaluated models; results are single-seed with no seed variance. All other data, objectives, batch and hyperparameters are unchanged.
