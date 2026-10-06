@@ -58,10 +58,6 @@ training:
     ratio: 1.0
     skew_alpha: 0.1
     student_generation: false
-  # hidden_mse/seed10 was stopped early in epoch 2; continue it from its
-  # epoch-1 checkpoint (weights and projectors only, no optimizer state).
-  resume:
-    hidden_mse/seed10: 996
   auxiliary:
     hidden_mse: 1.0
     gram: 1.0
