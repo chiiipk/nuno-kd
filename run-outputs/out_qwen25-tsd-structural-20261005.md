@@ -106,6 +106,17 @@ Metrics, in column order:
 - MMLU-Pro-Math: `custom-extract`.
 - BBH-COT: `exact_match,get-answer`.
 
+### Score verification
+
+All 48 cells (6 models × 8 tasks) and the 6 averages were cross-checked after the run. No cell differed by more than 1e-6.
+- **Three sources agree.** Each `scores.json` value equals lm-eval's own aggregate in that task's `results_*.json`, and also equals the value recomputed from the raw `samples_*.jsonl`.
+  - The recomputation uses only rows of the headline filter, for example 1,319 `flexible-extract` rows for GSM8K.
+  - Group tasks (MATH, MMLU-STEM, BBH) are sample-weighted means over their subtasks, which is how lm-eval aggregates them.
+- **The CSV table matches the score files.** Each table cell is the same value rounded to two decimals.
+- **The averages are correct.** Each average is the plain mean of its model's eight task scores.
+- **The `hidden_mse` export is the trained model.** The evaluated `1992-vllm` weights are identical to the 339 non-projector tensors of `1992/pytorch_model.bin`. The only tensors dropped are `projectors.0–3.weight`.
+- **The check confirms the arithmetic, not the grading.** It does not re-grade answers: the correctness of lm-eval's extractors (for example the strict BBH regex) is taken as given.
+
 ### Change versus the base student
 
 The table shows the trained model's score minus the base student's score.
