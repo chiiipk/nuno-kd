@@ -84,12 +84,15 @@ def find_metric(payload: dict, task: str) -> tuple[str, float, float | None]:
     raise KeyError(f"No supported metric found for {task}; available rows: {list(results)}")
 
 
-def gpu_memory_used_mib(gpu: str) -> int:
-    out = subprocess.run(
-        ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", gpu],
-        check=True, capture_output=True, text=True,
-    ).stdout
-    return int(out.strip())
+def gpu_idle(gpu: str, free_mib: int) -> bool:
+    """True if no process runs on the GPU and its memory use is below free_mib."""
+    def query(*fields: str) -> str:
+        return subprocess.run(
+            ["nvidia-smi", *fields, "--format=csv,noheader,nounits", "-i", gpu],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    return not query("--query-compute-apps=pid") and int(query("--query-gpu=memory.used")) < free_mib
 
 
 def lease_gpu(args: argparse.Namespace, task: str):
@@ -97,10 +100,11 @@ def lease_gpu(args: argparse.Namespace, task: str):
 
     Leases are flock()s in --gpu-lock-dir, so concurrent evaluations of several
     checkpoints share one pool and never put two vLLM engines on the same GPU.
-    A leased GPU is used only once its memory is free (e.g. after a vLLM engine
-    started without a lease has exited).
+    A leased GPU is used only once it is completely idle: no process of any
+    user or project on it, and its memory below --gpu-free-mib.
     """
     args.gpu_lock_dir.mkdir(parents=True, exist_ok=True)
+    announced = False
     while True:
         for gpu in args.gpus:
             handle = (args.gpu_lock_dir / f"gpu{gpu}.lock").open("w")
@@ -109,14 +113,14 @@ def lease_gpu(args: argparse.Namespace, task: str):
             except BlockingIOError:
                 handle.close()
                 continue
-            announced = False
-            while gpu_memory_used_mib(gpu) > args.gpu_free_mib:
-                if not announced:
-                    print(f"[{args.output}] {task}: waiting for GPU {gpu} memory to free", flush=True)
-                    announced = True
-                time.sleep(10)
-            return gpu, handle
-        time.sleep(5)
+            if gpu_idle(gpu, args.gpu_free_mib):
+                return gpu, handle
+            # Busy with another job: release it so the next GPU can be tried.
+            handle.close()
+        if not announced:
+            print(f"[{args.output}] {task}: waiting for an idle GPU", flush=True)
+            announced = True
+        time.sleep(10)
 
 
 def run_task(args: argparse.Namespace, task: str) -> tuple[str, str, float, float | None, list[str], int]:
@@ -194,7 +198,7 @@ def run_task_on_gpu(args: argparse.Namespace, task: str, gpu: str) -> None:
     cmd = build_command(args, task)
     env = os.environ.copy()
     env.update({
-        # Match nvidia-smi numbering, which lease_gpu() uses for the memory check.
+        # Match nvidia-smi numbering, which lease_gpu() uses for the idle check.
         "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
         "CUDA_VISIBLE_DEVICES": gpu,
         "HF_ALLOW_CODE_EVAL": "1",
