@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,11 @@ TASKS = {
     "mmlu_pro_math": {"fewshot": None, "unsafe": False},
     "bbh_cot_fewshot": {"fewshot": None, "unsafe": False},
 }
+
+# The BBH template stops at "\n\n" and "Q", which cuts chat-formatted answers
+# after their first paragraph, before "the answer is ...". Stop only at the
+# Qwen chat end-of-turn token (lm-eval also appends the tokenizer EOS).
+STOP_OVERRIDES = {"bbh_cot_fewshot": "<|im_end|>"}
 
 METRIC_PRIORITY = {
     "gsm8k": ("exact_match,flexible-extract", "exact_match,strict-match", "exact_match"),
@@ -80,14 +86,17 @@ def run_task(args: argparse.Namespace, task: str, gpu: str) -> tuple[str, str, f
     task_dir = args.output / task
     task_dir.mkdir(parents=True, exist_ok=True)
     model_args = (
-        f"pretrained={args.checkpoint},tensor_parallel_size=1,dtype=bfloat16,"
+        f"pretrained={args.model_path},tensor_parallel_size=1,dtype=bfloat16,"
         f"gpu_memory_utilization={args.gpu_memory_utilization},trust_remote_code=True"
     )
+    gen_kwargs = f"max_new_tokens={args.max_new_tokens},temperature=0.0"
+    if task in STOP_OVERRIDES:
+        gen_kwargs += f",until={STOP_OVERRIDES[task]}"
     cmd = [
         sys.executable, "-m", "lm_eval", "--model", "vllm",
         "--model_args", model_args, "--tasks", task, "--batch_size", "auto",
         "--log_samples", "--output_path", str(task_dir),
-        "--gen_kwargs", f"max_new_tokens={args.max_new_tokens},temperature=0.0",
+        "--gen_kwargs", gen_kwargs,
     ]
     spec = TASKS[task]
     if task != "mbpp":
@@ -135,6 +144,35 @@ def run_task(args: argparse.Namespace, task: str, gpu: str) -> tuple[str, str, f
     )
 
 
+def vllm_model_path(checkpoint: Path) -> Path:
+    """Return a checkpoint vLLM can load, without training-only modules.
+
+    finetune.py saves learned projectors (``projectors.*``) beside the student
+    weights; vLLM rejects unknown parameters, so evaluate a copy without them.
+    """
+    weights = checkpoint / "pytorch_model.bin"
+    if not weights.is_file():
+        return checkpoint
+    import torch
+
+    state = torch.load(weights, map_location="cpu", mmap=True, weights_only=True)
+    extra = [key for key in state if not key.startswith(("model.", "lm_head."))]
+    if not extra:
+        return checkpoint
+    export = checkpoint.with_name(checkpoint.name + "-vllm")
+    done = export / "EXPORT_COMPLETE"
+    if not done.is_file():
+        shutil.rmtree(export, ignore_errors=True)
+        export.mkdir(parents=True)
+        for path in checkpoint.iterdir():
+            if path.is_file() and path.name != weights.name:
+                shutil.copy2(path, export / path.name)
+        torch.save({k: v for k, v in state.items() if k not in extra}, export / weights.name)
+        done.write_text(json.dumps({"source": str(checkpoint), "dropped": extra}, indent=2) + "\n")
+    print(f"evaluating {export} ({len(extra)} training-only tensors dropped)", flush=True)
+    return export
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -143,6 +181,7 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=5120)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--tasks", help="Comma-separated subset to rerun into an existing scores.json.")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     gpus = [item.strip() for item in args.gpus.split(",") if item.strip()]
@@ -150,7 +189,22 @@ def main() -> None:
         parser.error("--gpus must contain at least one GPU")
 
     scores: dict[str, dict[str, float | str]] = {}
+    previous = None
     task_names = list(TASKS)
+    if args.tasks:
+        task_names = [item.strip() for item in args.tasks.split(",") if item.strip()]
+        unknown = sorted(set(task_names) - set(TASKS))
+        if unknown:
+            parser.error(f"unknown tasks: {unknown}")
+        previous = json.loads((args.output / "scores.json").read_text())
+        scores = dict(previous["scores"])
+        # Keep the superseded run for audit; its samples must not be recounted.
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        for task in task_names:
+            if (args.output / task).exists():
+                (args.output / task).rename(args.output / f"{task}.superseded_{stamp}")
+        (args.output / "scores.json").rename(args.output / f"scores.superseded_{stamp}.json")
+    args.model_path = vllm_model_path(args.checkpoint)
     # Run in waves so no two vLLM processes are ever assigned the same GPU.
     for start in range(0, len(task_names), len(gpus)):
         wave = task_names[start : start + len(gpus)]
@@ -173,6 +227,8 @@ def main() -> None:
     ordered_values = [float(scores[task]["value"]) for task in TASKS]
     output = {
         "checkpoint": str(args.checkpoint),
+        "evaluated_path": str(args.model_path),
+        "stop_overrides": STOP_OVERRIDES,
         "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "lm_eval_commit": os.environ.get("LM_EVAL_COMMIT", "unknown"),
         "gpus": gpus,
@@ -181,6 +237,9 @@ def main() -> None:
         "scores": {task: scores[task] for task in TASKS},
         "average": sum(ordered_values) / len(ordered_values),
     }
+    if previous is not None:
+        output["rerun_tasks"] = task_names
+        output["previous_created_at_utc"] = previous.get("created_at_utc")
     (args.output / "scores.json").write_text(json.dumps(output, indent=2) + "\n")
 
 
