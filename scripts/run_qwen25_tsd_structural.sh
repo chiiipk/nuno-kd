@@ -371,7 +371,7 @@ eval_checkpoint() {
   "${EVAL_PYTHON}" "${ROOT}/baselines/eval_lm_harness.py" \
     --checkpoint "${checkpoint}" --output "${output}" --gpus "${GPU_CSV}" \
     --max-new-tokens "${EVAL_MAX_NEW_TOKENS}" \
-    --gpu-memory-utilization "${EVAL_GPU_MEMORY}"
+    --gpu-memory-utilization "${EVAL_GPU_MEMORY}" --reuse-complete
 }
 
 eval_fixed_model() {

@@ -120,16 +120,23 @@ def lease_gpu(args: argparse.Namespace, task: str):
 
 
 def run_task(args: argparse.Namespace, task: str) -> tuple[str, str, float, float | None, list[str], int]:
+    task_dir = args.output / task
+    if args.reuse_complete and completed_run(args, task):
+        print(f"[{args.output}] {task}: reusing the completed lm-eval run", flush=True)
+        args.reused_tasks.append(task)
+        return collect_result(args, task)
+    if args.reuse_complete and task_dir.exists():
+        # Keep an interrupted run for audit; its partial files must not be read.
+        task_dir.rename(args.output / f"{task}.incomplete_{args.stamp}")
     gpu, lease = lease_gpu(args, task)
     try:
-        return run_task_on_gpu(args, task, gpu)
+        run_task_on_gpu(args, task, gpu)
     finally:
         lease.close()
+    return collect_result(args, task)
 
 
-def run_task_on_gpu(args: argparse.Namespace, task: str, gpu: str) -> tuple[str, str, float, float | None, list[str], int]:
-    task_dir = args.output / task
-    task_dir.mkdir(parents=True, exist_ok=True)
+def build_command(args: argparse.Namespace, task: str) -> list[str]:
     model_args = (
         f"pretrained={args.model_path},tensor_parallel_size=1,dtype=bfloat16,"
         f"gpu_memory_utilization={args.gpu_memory_utilization},trust_remote_code=True"
@@ -140,7 +147,7 @@ def run_task_on_gpu(args: argparse.Namespace, task: str, gpu: str) -> tuple[str,
     cmd = [
         sys.executable, "-m", "lm_eval", "--model", "vllm",
         "--model_args", model_args, "--tasks", task, "--batch_size", "auto",
-        "--log_samples", "--output_path", str(task_dir),
+        "--log_samples", "--output_path", str(args.output / task),
         "--gen_kwargs", gen_kwargs,
     ]
     spec = TASKS[task]
@@ -152,7 +159,39 @@ def run_task_on_gpu(args: argparse.Namespace, task: str, gpu: str) -> tuple[str,
         cmd.append("--confirm_run_unsafe_code")
     if args.limit is not None:
         cmd += ["--limit", str(args.limit)]
+    return cmd
 
+
+def comparable(cmd: list[str]) -> list[str]:
+    """Drop the interpreter and resolve paths, which may be relative or absolute."""
+    norm = list(cmd[1:])
+    for index, item in enumerate(norm):
+        if index and norm[index - 1] == "--output_path":
+            norm[index] = str(Path(item).resolve())
+        elif item.startswith("pretrained="):
+            path, _, rest = item.removeprefix("pretrained=").partition(",")
+            norm[index] = f"pretrained={Path(path).resolve()},{rest}"
+    return norm
+
+
+def completed_run(args: argparse.Namespace, task: str) -> bool:
+    """True if the task directory holds a finished run of exactly this command."""
+    task_dir = args.output / task
+    log = task_dir / "eval.log"
+    if not log.is_file() or not list(task_dir.rglob("results*.json")):
+        return False
+    first = log.read_text(errors="ignore").split("\n", 1)[0]
+    if not first.startswith("COMMAND: "):
+        return False
+    if comparable(json.loads(first.removeprefix("COMMAND: "))) != comparable(build_command(args, task)):
+        raise RuntimeError(f"{task_dir} holds a finished run of a different command; refusing to reuse it")
+    return True
+
+
+def run_task_on_gpu(args: argparse.Namespace, task: str, gpu: str) -> None:
+    task_dir = args.output / task
+    task_dir.mkdir(parents=True, exist_ok=True)
+    cmd = build_command(args, task)
     env = os.environ.copy()
     env.update({
         # Match nvidia-smi numbering, which lease_gpu() uses for the memory check.
@@ -169,6 +208,10 @@ def run_task_on_gpu(args: argparse.Namespace, task: str, gpu: str) -> tuple[str,
         completed = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
     if completed.returncode:
         raise subprocess.CalledProcessError(completed.returncode, cmd)
+
+
+def collect_result(args: argparse.Namespace, task: str) -> tuple[str, str, float, float | None, list[str], int]:
+    task_dir = args.output / task
     result_file = newest_result(task_dir)
     payload = json.loads(result_file.read_text())
     metric, value, stderr = find_metric(payload, task)
@@ -234,12 +277,18 @@ def main() -> None:
         help="Shared by concurrent evaluations so they draw from one GPU pool.",
     )
     parser.add_argument("--gpu-free-mib", type=int, default=2048, help="A leased GPU is used below this memory use.")
+    parser.add_argument(
+        "--reuse-complete", action="store_true",
+        help="Reuse task directories holding a finished run of the same command; rerun the rest.",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     gpus = [item.strip() for item in args.gpus.split(",") if item.strip()]
     if not gpus:
         parser.error("--gpus must contain at least one GPU")
     args.gpus = gpus
+    args.reused_tasks = []
+    args.stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     scores: dict[str, dict[str, float | str]] = {}
     previous = None
@@ -252,11 +301,10 @@ def main() -> None:
         previous = json.loads((args.output / "scores.json").read_text())
         scores = dict(previous["scores"])
         # Keep the superseded run for audit; its samples must not be recounted.
-        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         for task in task_names:
             if (args.output / task).exists():
-                (args.output / task).rename(args.output / f"{task}.superseded_{stamp}")
-        (args.output / "scores.json").rename(args.output / f"scores.superseded_{stamp}.json")
+                (args.output / task).rename(args.output / f"{task}.superseded_{args.stamp}")
+        (args.output / "scores.json").rename(args.output / f"scores.superseded_{args.stamp}.json")
     args.model_path = vllm_model_path(args.checkpoint)
     # Each task leases one GPU from the shared pool as soon as one is free.
     with ThreadPoolExecutor(max_workers=len(task_names)) as pool:
@@ -285,6 +333,8 @@ def main() -> None:
         "scores": {task: scores[task] for task in TASKS},
         "average": sum(ordered_values) / len(ordered_values),
     }
+    if args.reused_tasks:
+        output["reused_tasks"] = sorted(args.reused_tasks)
     if previous is not None:
         output["rerun_tasks"] = task_names
         output["previous_created_at_utc"] = previous.get("created_at_utc")
