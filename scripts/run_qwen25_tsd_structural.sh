@@ -400,15 +400,23 @@ run_train() {
 run_eval() {
   [[ -x "${EVAL_PYTHON}" ]] || \
     die "Evaluator missing: ${EVAL_PYTHON}; run: bash baselines/setup_env.sh evaluator"
-  [[ "${EVAL_TEACHER}" == 1 ]] && eval_fixed_model teacher "${TEACHER_MODEL}"
-  [[ "${EVAL_STUDENT}" == 1 ]] && eval_fixed_model student "${STUDENT_MODEL}"
+  # All models run concurrently; eval_lm_harness.py hands every task one GPU
+  # from a shared lease pool, so the GPUs stay busy across model boundaries.
+  local pids=() pid failed=0
+  [[ "${EVAL_TEACHER}" == 1 ]] && { eval_fixed_model teacher "${TEACHER_MODEL}" & pids+=("$!"); }
+  [[ "${EVAL_STUDENT}" == 1 ]] && { eval_fixed_model student "${STUDENT_MODEL}" & pids+=("$!"); }
   local method seed checkpoint
   for method in "${METHOD_LIST[@]}"; do
     for seed in "${SEED_LIST[@]}"; do
       checkpoint="$(latest_checkpoint "${TRAIN_ROOT}/${method}/seed${seed}")"
-      eval_checkpoint "${checkpoint}" "${EVAL_ROOT}/${PAIR}/${method}/seed${seed}"
+      eval_checkpoint "${checkpoint}" "${EVAL_ROOT}/${PAIR}/${method}/seed${seed}" &
+      pids+=("$!")
     done
   done
+  for pid in "${pids[@]}"; do
+    wait "${pid}" || failed=1
+  done
+  [[ "${failed}" == 0 ]] || die "At least one evaluation failed; see the eval.log files under ${EVAL_ROOT}"
 }
 
 run_report() {

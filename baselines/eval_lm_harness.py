@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -82,7 +84,50 @@ def find_metric(payload: dict, task: str) -> tuple[str, float, float | None]:
     raise KeyError(f"No supported metric found for {task}; available rows: {list(results)}")
 
 
-def run_task(args: argparse.Namespace, task: str, gpu: str) -> tuple[str, str, float, float | None, list[str], int]:
+def gpu_memory_used_mib(gpu: str) -> int:
+    out = subprocess.run(
+        ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", gpu],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    return int(out.strip())
+
+
+def lease_gpu(args: argparse.Namespace, task: str):
+    """Block until this process holds an exclusive lease on an idle GPU.
+
+    Leases are flock()s in --gpu-lock-dir, so concurrent evaluations of several
+    checkpoints share one pool and never put two vLLM engines on the same GPU.
+    A leased GPU is used only once its memory is free (e.g. after a vLLM engine
+    started without a lease has exited).
+    """
+    args.gpu_lock_dir.mkdir(parents=True, exist_ok=True)
+    while True:
+        for gpu in args.gpus:
+            handle = (args.gpu_lock_dir / f"gpu{gpu}.lock").open("w")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                continue
+            announced = False
+            while gpu_memory_used_mib(gpu) > args.gpu_free_mib:
+                if not announced:
+                    print(f"[{args.output}] {task}: waiting for GPU {gpu} memory to free", flush=True)
+                    announced = True
+                time.sleep(10)
+            return gpu, handle
+        time.sleep(5)
+
+
+def run_task(args: argparse.Namespace, task: str) -> tuple[str, str, float, float | None, list[str], int]:
+    gpu, lease = lease_gpu(args, task)
+    try:
+        return run_task_on_gpu(args, task, gpu)
+    finally:
+        lease.close()
+
+
+def run_task_on_gpu(args: argparse.Namespace, task: str, gpu: str) -> tuple[str, str, float, float | None, list[str], int]:
     task_dir = args.output / task
     task_dir.mkdir(parents=True, exist_ok=True)
     model_args = (
@@ -110,6 +155,8 @@ def run_task(args: argparse.Namespace, task: str, gpu: str) -> tuple[str, str, f
 
     env = os.environ.copy()
     env.update({
+        # Match nvidia-smi numbering, which lease_gpu() uses for the memory check.
+        "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
         "CUDA_VISIBLE_DEVICES": gpu,
         "HF_ALLOW_CODE_EVAL": "1",
         "PYTHONUNBUFFERED": "1",
@@ -182,11 +229,17 @@ def main() -> None:
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--tasks", help="Comma-separated subset to rerun into an existing scores.json.")
+    parser.add_argument(
+        "--gpu-lock-dir", type=Path, default=Path(f"/tmp/eval_lm_harness_gpu_locks_{os.getuid()}"),
+        help="Shared by concurrent evaluations so they draw from one GPU pool.",
+    )
+    parser.add_argument("--gpu-free-mib", type=int, default=2048, help="A leased GPU is used below this memory use.")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     gpus = [item.strip() for item in args.gpus.split(",") if item.strip()]
     if not gpus:
         parser.error("--gpus must contain at least one GPU")
+    args.gpus = gpus
 
     scores: dict[str, dict[str, float | str]] = {}
     previous = None
@@ -205,24 +258,19 @@ def main() -> None:
                 (args.output / task).rename(args.output / f"{task}.superseded_{stamp}")
         (args.output / "scores.json").rename(args.output / f"scores.superseded_{stamp}.json")
     args.model_path = vllm_model_path(args.checkpoint)
-    # Run in waves so no two vLLM processes are ever assigned the same GPU.
-    for start in range(0, len(task_names), len(gpus)):
-        wave = task_names[start : start + len(gpus)]
-        with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-            pending = {
-                pool.submit(run_task, args, task, gpus[index]): task
-                for index, task in enumerate(wave)
+    # Each task leases one GPU from the shared pool as soon as one is free.
+    with ThreadPoolExecutor(max_workers=len(task_names)) as pool:
+        pending = {pool.submit(run_task, args, task): task for task in task_names}
+        for future in as_completed(pending):
+            task, metric, value, stderr, sample_files, sample_count = future.result()
+            scores[task] = {
+                "metric": metric,
+                "value": value,
+                "lm_eval_stderr": stderr,
+                "sample_files": sample_files,
+                "sample_count": sample_count,
             }
-            for future in as_completed(pending):
-                task, metric, value, stderr, sample_files, sample_count = future.result()
-                scores[task] = {
-                    "metric": metric,
-                    "value": value,
-                    "lm_eval_stderr": stderr,
-                    "sample_files": sample_files,
-                    "sample_count": sample_count,
-                }
-                print(f"{task}: {value:.2f} ({metric}), samples={sample_count}", flush=True)
+            print(f"[{args.output}] {task}: {value:.2f} ({metric}), samples={sample_count}", flush=True)
 
     ordered_values = [float(scores[task]["value"]) for task in TASKS]
     output = {
