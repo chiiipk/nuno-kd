@@ -17,7 +17,7 @@
 - `remote_path`: `/nvme/annp36-home/work/CST`.
 - `source_revision`: branch `qwen25-tsd-structural`, the commit that adds this file.
 - `source_hashes`:
-  - `configs/qwen25_tsd_structural_w10.yaml`: `435c2263cdb66da2f373ab0e596a2a2953ad622f8b299012fce8a016544de0fc`.
+  - `configs/qwen25_tsd_structural_w10.yaml`: `bb913c72b4eab7a3bb0c60ee47ff5571ad7db24e3009e8a43eaffba1c882e757`.
   - `scripts/run_qwen25_tsd_structural.sh`: `7eb183412fe2853a3bf9a9da7e44ab67979a30fb9c1de8bf7868d6045c07b452`. It adds two things to `train_one`:
     - `wait_for_idle_gpus`, which starts a training run only when every listed GPU has no compute process and less than 2048 MiB in use.
     - `CUDA_DEVICE_ORDER=PCI_BUS_ID`, so CUDA indices 0–5 are `nvidia-smi` GPUs 0–5.
@@ -52,7 +52,7 @@ Data is unchanged from the parent:
 - `student`: `Qwen/Qwen2.5-1.5B-Instruct` @ `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`, ZeRO-2 bf16.
 - `model_paths`: the parent's server-only runtime config already maps the Hub ids to local snapshot paths. The w10 runtime config `configs/qwen25_tsd_structural_w10.remote.yaml` is the w10 YAML with those two paths substituted, and runs offline.
 - `methods`: `gram`, `cka` and `direct_spectrum`, with `sfkl` output KD (ratio 1.0, skew alpha 0.1, no student generation).
-- `auxiliary_weights`: gram `1.0e5`, cka `10.0`, direct_spectrum `10.0`. The weight ramps linearly from 0 at step 100 to full weight at step 300, as in the parent.
+- `auxiliary_weights`: gram `100000.0` (10^5; written in full because PyYAML reads `1.0e5` as a string), cka `10.0`, direct_spectrum `10.0`. The weight ramps linearly from 0 at step 100 to full weight at step 300, as in the parent.
 - `seed`: `10`.
 - `epochs`: `2`.
 - `optimizer`: AdamW, LR `5e-6`, weight decay `1e-2`, cosine schedule, warmup ratio `0.1`, gradient clip `1.0`.

@@ -63,7 +63,7 @@ training:
   auxiliary:
     hidden_mse: 1.0
     # Trace-normalized Gram MSE is ~1e-5 per step, so it needs a far larger weight.
-    gram: 1.0e5
+    gram: 100000.0
     cka: 10.0
     normalized_spectrum: 1.0
     direct_spectrum: 10.0
