@@ -1,0 +1,102 @@
+# Qwen2.5 hidden-state distillation, stronger auxiliary weights (run 2026-10-08).
+# Same protocol as qwen25_tsd_structural.yaml except: GPUs 0-5, gradient
+# accumulation 13 (global batch 6x1x13 = 78), methods gram/cka/direct_spectrum,
+# weights gram 1e5, cka 10, direct_spectrum 10, and separate output roots.
+# Run with: bash scripts/run_qwen25_tsd_structural.sh all configs/qwen25_tsd_structural_w10.yaml
+
+experiment:
+  name: qwen25_tsd_structural_w10
+  pair: qwen25_tsd
+
+models:
+  teacher: Qwen/Qwen2.5-14B-Instruct
+  student: Qwen/Qwen2.5-1.5B-Instruct
+  model_type: qwen
+  teacher_fp16: true
+
+data:
+  repo_id: Minsang/TSD-KD-Qwen2.5-1.5B-Instruct-Gen
+  revision: 450c33f2d591f68e12ecb546c16cf79821ef0006
+  filename: Qwen2.5-1.5B-Instruct_train_all.jsonl
+  split: train
+  expected_examples: 79751
+  sha256: c9b0a1cef6025334a9f947dc20d591b79baf88d6a1c19f2ac7a684d8330862bb
+  raw_dir: data/tsd_kd_qwen25/raw
+  canonical_file: data/tsd_kd_qwen25/canonical/train.jsonl
+  processed_root: processed_data/tsd_kd_qwen25
+  processed_dir: processed_data/tsd_kd_qwen25/Qwen/Qwen2.5-1.5B-Instruct
+  contract_file: processed_data/tsd_kd_qwen25/Qwen/Qwen2.5-1.5B-Instruct/dataset_contract.json
+  preprocess_workers: 32
+  # Used only for the trainer's in-run sanity evaluation. The final reported
+  # evaluation is the separate eight-benchmark suite below.
+  dev_examples: 200
+
+resources:
+  # Six of vt-admin's eight H200 GPUs; every training job uses all six as one DDP job.
+  gpus: "0,1,2,3,4,5"
+  deepspeed_config: configs/deepspeed/ds_config_zero2_bf16.json
+  dataloader_workers: 4
+
+training:
+  seeds: [10]
+  methods:
+    - gram
+    - cka
+    - direct_spectrum
+  epochs: 2
+  learning_rate: 5.0e-6
+  min_learning_rate: 0.0
+  micro_batch_size: 1
+  gradient_accumulation_steps: 13
+  weight_decay: 1.0e-2
+  gradient_clip: 1.0
+  scheduler: cosine
+  lr_warmup_ratio: 0.1
+  max_length: 1024
+  max_prompt_length: 512
+  output_kd:
+    enabled: true
+    type: sfkl
+    ratio: 1.0
+    skew_alpha: 0.1
+    student_generation: false
+  auxiliary:
+    hidden_mse: 1.0
+    # Trace-normalized Gram MSE is ~1e-5 per step, so it needs a far larger weight.
+    gram: 1.0e5
+    cka: 10.0
+    normalized_spectrum: 1.0
+    direct_spectrum: 10.0
+    cst: 0.003
+    warmup_steps: 100
+    ramp_steps: 200
+    max_tokens: 64
+    num_layers: 4
+    layer_min: 0.20
+    layer_max: 0.85
+    gamma_min: 1.0e-2
+    gamma_max: 1.0e2
+    num_gamma_samples: 2
+    gamma_sampling: log_uniform
+    distance: l2
+
+evaluation:
+  tasks:
+    - gsm8k
+    - gsm_plus
+    - minerva_math
+    - mbpp
+    - sciq
+    - mmlu_stem
+    - mmlu_pro_math
+    - bbh_cot_fewshot
+  include_teacher: true
+  include_base_student: true
+  evaluator_python: baselines/vendor/lm-evaluation-harness/.venv/bin/python
+  max_new_tokens: 5120
+  gpu_memory_utilization: 0.85
+
+outputs:
+  train_root: results/qwen25_tsd_structural_w10
+  eval_root: benchmark_results/qwen25_tsd_structural_w10
+  table_root: benchmark_results/qwen25_tsd_structural_w10/tables

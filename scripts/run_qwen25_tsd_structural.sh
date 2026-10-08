@@ -272,6 +272,28 @@ print(max(candidates)[2])
 PY
 }
 
+# Block until every GPU in resources.gpus is completely idle: no compute process
+# of any user or project, and less than 2048 MiB in use. Training never shares
+# a GPU with another job.
+wait_for_idle_gpus() {
+  local announced=0 gpu busy
+  while true; do
+    busy=""
+    for gpu in "${GPU_LIST[@]}"; do
+      if [[ -n "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader -i "${gpu}")" ]] || \
+          (( $(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "${gpu}") >= 2048 )); then
+        busy+=" ${gpu}"
+      fi
+    done
+    [[ -z "${busy}" ]] && return
+    if [[ "${announced}" == 0 ]]; then
+      echo "[wait] GPUs busy:${busy}; waiting until all of ${GPU_CSV} are idle"
+      announced=1
+    fi
+    sleep 30
+  done
+}
+
 train_one() {
   local method="$1" seed="$2" aux_weight run_dir
   aux_weight="$(method_weight "${method}")"
@@ -280,7 +302,10 @@ train_one() {
     echo "[skip train] ${method}/seed${seed}"
     return
   fi
+  wait_for_idle_gpus
   mkdir -p "${run_dir}"
+  # PCI bus order makes the CUDA indices match nvidia-smi's GPU ids.
+  export CUDA_DEVICE_ORDER=PCI_BUS_ID
   export CUDA_VISIBLE_DEVICES="${GPU_CSV}"
   export WANDB_DISABLED=true
   export PYTHONUNBUFFERED=1
