@@ -27,6 +27,12 @@ TASKS = {
     "bbh_cot_fewshot": {"fewshot": None, "unsafe": False},
 }
 
+# Run only when named in --tasks; never part of the eight-task suite or its average.
+EXTRA_TASKS = {
+    "hendrycks_math": {"fewshot": None, "unsafe": False},
+}
+ALL_TASKS = {**TASKS, **EXTRA_TASKS}
+
 # The BBH template stops at "\n\n" and "Q", which cuts chat-formatted answers
 # after their first paragraph, before "the answer is ...". Stop only at the
 # Qwen chat end-of-turn token (lm-eval also appends the tokenizer EOS).
@@ -44,6 +50,7 @@ METRIC_PRIORITY = {
         "acc,none", "acc", "exact_match,none", "exact_match",
     ),
     "bbh_cot_fewshot": ("exact_match,flexible-extract", "exact_match,get-answer", "exact_match,none", "exact_match"),
+    "hendrycks_math": ("exact_match,none", "exact_match"),
 }
 
 
@@ -154,7 +161,7 @@ def build_command(args: argparse.Namespace, task: str) -> list[str]:
         "--log_samples", "--output_path", str(args.output / task),
         "--gen_kwargs", gen_kwargs,
     ]
-    spec = TASKS[task]
+    spec = ALL_TASKS[task]
     if task != "mbpp":
         cmd += ["--apply_chat_template", "--fewshot_as_multiturn"]
     if spec["fewshot"] is not None:
@@ -275,7 +282,7 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=5120)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--tasks", help="Comma-separated subset to rerun into an existing scores.json.")
+    parser.add_argument("--tasks", help="Comma-separated tasks: rerun into an existing scores.json, or run alone in a fresh output.")
     parser.add_argument(
         "--gpu-lock-dir", type=Path, default=Path(f"/tmp/eval_lm_harness_gpu_locks_{os.getuid()}"),
         help="Shared by concurrent evaluations so they draw from one GPU pool.",
@@ -299,9 +306,10 @@ def main() -> None:
     task_names = list(TASKS)
     if args.tasks:
         task_names = [item.strip() for item in args.tasks.split(",") if item.strip()]
-        unknown = sorted(set(task_names) - set(TASKS))
+        unknown = sorted(set(task_names) - set(ALL_TASKS))
         if unknown:
             parser.error(f"unknown tasks: {unknown}")
+    if args.tasks and (args.output / "scores.json").is_file():
         previous = json.loads((args.output / "scores.json").read_text())
         scores = dict(previous["scores"])
         # Keep the superseded run for audit; its samples must not be recounted.
@@ -324,7 +332,11 @@ def main() -> None:
             }
             print(f"[{args.output}] {task}: {value:.2f} ({metric}), samples={sample_count}", flush=True)
 
-    ordered_values = [float(scores[task]["value"]) for task in TASKS]
+    suite = [task for task in ALL_TASKS if task in scores]
+    # The average is the eight-task mean when all eight are present; a run of
+    # other tasks only (e.g. --tasks hendrycks_math in a fresh output) averages those.
+    averaged = list(TASKS) if all(task in scores for task in TASKS) else suite
+    ordered_values = [float(scores[task]["value"]) for task in averaged]
     output = {
         "checkpoint": str(args.checkpoint),
         "evaluated_path": str(args.model_path),
@@ -334,7 +346,7 @@ def main() -> None:
         "gpus": gpus,
         "max_new_tokens": args.max_new_tokens,
         "limit": args.limit,
-        "scores": {task: scores[task] for task in TASKS},
+        "scores": {task: scores[task] for task in suite},
         "average": sum(ordered_values) / len(ordered_values),
     }
     if args.reused_tasks:
