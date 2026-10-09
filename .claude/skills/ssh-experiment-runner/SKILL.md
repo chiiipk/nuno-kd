@@ -50,6 +50,7 @@ Ask only for missing fields that change the run. Never invent paths, commands, r
 - Run `hf auth whoami`. If not logged in, log in from `HF_TOKEN` or the token file through `huggingface_hub.login`. If neither exists, ask the user.
 - Never print or store a token.
 - Prefetch each pinned revision once, then set `HF_HUB_OFFLINE=1` for every run.
+- Prefetch only config, tokenizer and one weight format (safetensors, else `pytorch_model.bin`), never a whole repo: one `--include` per pattern, plus `--exclude 'onnx/*' --exclude 'openvino/*'`.
 
 ## 5. Training on H200
 
