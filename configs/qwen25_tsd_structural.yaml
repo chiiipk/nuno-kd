@@ -19,7 +19,6 @@ data:
   sha256: c9b0a1cef6025334a9f947dc20d591b79baf88d6a1c19f2ac7a684d8330862bb
   raw_dir: data/tsd_kd_qwen25/raw
   canonical_file: data/tsd_kd_qwen25/canonical/train.jsonl
-  processed_root: processed_data/tsd_kd_qwen25
   processed_dir: processed_data/tsd_kd_qwen25/Qwen/Qwen2.5-1.5B-Instruct
   contract_file: processed_data/tsd_kd_qwen25/Qwen/Qwen2.5-1.5B-Instruct/dataset_contract.json
   preprocess_workers: 32

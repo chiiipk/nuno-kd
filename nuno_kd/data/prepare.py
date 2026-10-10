@@ -1,10 +1,10 @@
 """Turn a teacher-generation JSONL into the trainer's tokenized format.
 
     python -m nuno_kd.data.prepare convert  --source RAW --target CANONICAL --expected N
-    python -m nuno_kd.data.prepare tokenize --data-file CANONICAL --processed-data-dir ROOT \
+    python -m nuno_kd.data.prepare tokenize --data-file CANONICAL --output-dir DIR \
         --model-path MODEL [--max-prompt-length 512] [--dev-num 200] [--workers 32]
 
-`tokenize` writes to ROOT/MODEL:
+`tokenize` writes to DIR, with MODEL's tokenizer and chat template:
 - `{split}_0.bin/.idx`: `prompt + [SEPARATOR] + response + [eos]` token ids per example;
 - `{split}.jsonl`: the matching instruction, chat-formatted prompt and response.
 The `train` split keeps every example in source order; `valid` holds --dev-num
@@ -70,8 +70,7 @@ class Encoder:
         return row, prompt_str, prompt[:self.max_prompt_length], response
 
 
-def tokenize(data_file, processed_data_dir, model_path, max_prompt_length, dev_num, workers):
-    output_dir = os.path.join(processed_data_dir, model_path)
+def tokenize(data_file, output_dir, model_path, max_prompt_length, dev_num, workers):
     os.makedirs(output_dir, exist_ok=True)
     with open(data_file, encoding="utf-8") as handle:
         rows = [json.loads(line) for line in handle if line.strip()]
@@ -112,7 +111,7 @@ def main():
     conv.add_argument("--expected", type=int, required=True)
     tok = sub.add_parser("tokenize")
     tok.add_argument("--data-file", required=True)
-    tok.add_argument("--processed-data-dir", required=True)
+    tok.add_argument("--output-dir", required=True)
     tok.add_argument("--model-path", required=True)
     tok.add_argument("--max-prompt-length", type=int, default=512)
     tok.add_argument("--dev-num", type=int, default=0)
@@ -121,7 +120,7 @@ def main():
     if args.command == "convert":
         convert(args.source, args.target, args.expected)
     else:
-        tokenize(args.data_file, args.processed_data_dir, args.model_path,
+        tokenize(args.data_file, args.output_dir, args.model_path,
                  args.max_prompt_length, args.dev_num, args.workers)
 
 

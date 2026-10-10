@@ -56,7 +56,6 @@ mapping = {
     "DATA_SHA256": "data.sha256",
     "RAW_DIR_REL": "data.raw_dir",
     "CANONICAL_REL": "data.canonical_file",
-    "PROCESSED_ROOT_REL": "data.processed_root",
     "PROCESSED_DIR_REL": "data.processed_dir",
     "CONTRACT_REL": "data.contract_file",
     "PREPROCESS_WORKERS": "data.preprocess_workers",
@@ -117,7 +116,6 @@ abs_path() {
 
 RAW_FILE="$(abs_path "${RAW_DIR_REL}")/${DATA_FILENAME}"
 CANONICAL_FILE="$(abs_path "${CANONICAL_REL}")"
-PROCESSED_ROOT="$(abs_path "${PROCESSED_ROOT_REL}")"
 PROCESSED_DIR="$(abs_path "${PROCESSED_DIR_REL}")"
 CONTRACT_FILE="$(abs_path "${CONTRACT_REL}")"
 DEEPSPEED_CONFIG="$(abs_path "${DEEPSPEED_REL}")"
@@ -196,7 +194,7 @@ prepare_data() {
     echo "[tokenize] tokenizer=${STUDENT_MODEL}"
     python3 -m nuno_kd.data.prepare tokenize \
       --data-file "${CANONICAL_FILE}" \
-      --processed-data-dir "${PROCESSED_ROOT}" \
+      --output-dir "${PROCESSED_DIR}" \
       --model-path "${STUDENT_MODEL}" \
       --max-prompt-length "${MAX_PROMPT_LENGTH}" \
       --dev-num "${DEV_EXAMPLES}" \
