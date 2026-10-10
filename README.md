@@ -1,96 +1,83 @@
 # NuNo-KD
 
-Compact implementation of NuNo-KD: on-policy knowledge distillation with a  representation loss (Nuclear Norm Matching) to preserve intermediate hidden-state geometry.
+Knowledge distillation of a small LLM from a larger one. Every method trains the
+student with the same output-level KD loss (skewed forward KL by default) and adds
+one auxiliary loss on the hidden states of a few matched layers:
 
-What this repo provides
-- Training scripts that combine standard output-layer KD with NNM for mid-layer spectral alignment
-- Utilities to build teacher centroids, apply NNM at selected layers, and run evaluation
+| `--aux-loss` | Matches |
+|---|---|
+| `hidden_mse` | student hidden states, through a learned projector, against the teacher's (MSE) |
+| `gram` | centered, trace-normalized token Gram matrices (MSE) |
+| `cka` | the same Gram matrices, by linear CKA |
+| `normalized_spectrum` | the normalized eigenvalue spectra of those Gram matrices |
+| `direct_spectrum` | the eigenvalue spectra of the token covariances |
+| `cst` | the Characteristic Spectral Transform, logdet(I + γG) over sampled γ |
 
-## Repository structure (short)
+All but `hidden_mse` compare token-by-token geometry, so the student and teacher
+widths may differ.
+
+## Layout
 
 ```
-NuNo/
-├─ configs/                # Deepspeed configs and hostfiles for distributed runs
-├─ data/                   # Example processed datasets (not full corpora)
-├─ data_utils/             # Dataset builders and indexed dataset utilities
-├─ distillm/               # Distillation losses, buffers, samplers
-├─ scripts/                # Shell wrappers: preprocessing, training, eval, data generation
-│  ├─ distillm-nnm/        # Example train scripts per model (gemma2, qwen2.5)
-│  ├─ gen-data/             # Data generation scripts
-│  └─ eval/                # Evaluation script(s)
-├─ tools/                  # Helper scripts (data processing, plotting, merging)
-├─ nnm_module.py           # NNM module implementation (representation loss)
-├─ nnm_variants.py         # Variants and helpers for NNM
-├─ nnm_recovery_weight.py  # Weighting / recovery utilities for NNM
-├─ finetune.py             # Fine-tuning utilities (distillation training)
-├─ generate.py             # Generation utilities / wrappers
-├─ run.sh                  # Example launcher
-└─ README.md               # This file
+nuno_kd/                 training package
+  train.py               trainer entry point (torchrun -m nuno_kd.train)
+  args.py                command-line arguments
+  modeling.py            model/tokenizer loading, layer selection, projectors
+  distributed.py         process group, seeding, rank-0 logging
+  data/prepare.py        convert and tokenize the teacher-generation dataset
+  data/contract.py       exact, ordered dataset check
+  data/indexed.py        memory-mapped token storage
+  data/dataset.py        training dataset and collation
+  losses/output_kd.py    output-level KD divergences
+  losses/structural.py   hidden_mse and token-geometry losses
+  losses/cst.py          CST loss
+evaluation/              lm-eval-harness suite, Hendrycks MATH rescoring, tables
+scripts/run_experiment.sh  config-driven prepare / train / eval / report pipeline
+configs/                 experiment YAML and the DeepSpeed config
+run-inputs/, run-outputs/  plans and reports of the server runs
+paper/                   paper sources
 ```
 
-Key notes on important files/folders
+## Setup
 
-- `configs/deepspeed/`: ready-to-use Deepspeed JSONs for different ZeRO stages and fp/bf16/offload options.
-
-- `scripts/process_data_ultraInteract.sh` and `tools/process_data_ultraInteract.py`: preprocess raw instruction-response data into training-ready JSONL.
-
-- `scripts/gen-data/`: scripts for generating or formatting dataset examples prior to preprocessing or training.
-
-- `scripts/distillm-nnm/*`: model-specific training wrappers — edit flags inside these scripts or call underlying Python entrypoints.
-
-- `finetune.py`: primary training entrypoint (distillation). Wrapper scripts call this file — inspect it for parsed flags and defaults. Common flags used by the repo include `--nnm-weight`, `--nnm-layers`, and `--kd-weight`.
-
-- `nnm_module.py` / `nnm_variants.py`: implementation details for the Nuclear Norm Matching objective and helper variants.
-
-- `distillm/losses.py`: integrates NNM with standard KD losses; see this file to understand how NNM is weighted and combined with output distillation.
-
-- `scripts/eval/eval.sh`: example evaluation invocation; edit the checkpoint path there or pass a path as argument.
-
- 
-
-## Quick start
-
-### 1. Install dependencies:
+Training environment (Python 3.10, CUDA 12.8):
 
 ```bash
-bash install.sh
+uv sync
 ```
 
-### 2. Process data (required before training):
+Evaluator, in its own venv under `evaluation/vendor/`:
 
 ```bash
-bash scripts/process_data_ultraInteract.sh
+LM_EVAL_REF=6d642546f4688648fced259eb3302efd36ece5af bash evaluation/setup.sh
 ```
 
-### 3. Train (example):
+## Run an experiment
 
-Primary training entrypoint: `finetune.py` (the shell wrappers in `scripts/` call this Python entrypoint with model-specific flags).
-
-Example (wrapper script):
+Everything is driven by one YAML file; [configs/qwen25_tsd_structural.yaml](configs/qwen25_tsd_structural.yaml)
+distils Qwen2.5-14B-Instruct into Qwen2.5-1.5B-Instruct on 8 GPUs.
 
 ```bash
-bash ./scripts/distillm-nnm/qwen2.5/train_qwen2.5_1.5B_it_2e.sh
+bash scripts/run_experiment.sh check configs/qwen25_tsd_structural.yaml
 ```
-
-Key flags
-
-- `--nnm-weight`    weight for the Nuclear Norm Matching loss
-- `--nnm-layers`    comma-separated list of intermediate layers to apply NNM
-- `--kd-weight`     weight for the output distillation loss
-
-
-### 4. Evaluation
-
-Run the evaluation script after updating the checkpoint path in `eval.sh`:
 
 ```bash
-bash ./scripts/eval/eval.sh
+bash scripts/run_experiment.sh all configs/qwen25_tsd_structural.yaml
 ```
 
-### Notes
+The phases can also run one at a time (`prepare`, `train`, `eval`, `report`).
+Finished training runs and evaluations are skipped when the pipeline is
+restarted. Outputs:
 
-- `scripts/eval/eval.sh` contains a sample invocation and a placeholder checkpoint; edit the checkpoint path inside that script if you prefer to change the default behavior.
-- `scripts/gen-data/` contains sample data generation and formatting utilities; use these to prepare raw inputs before running preprocessing.
- 
-This README is intentionally short — see script headers and source files for full options and experiment configurations.
- 
+- `results/<experiment>/<method>/seed<seed>/<step>/`: checkpoints, one per epoch, plus `log.txt` and `train.log`;
+- `benchmark_results/<experiment>/<pair>/<model>/seed<seed>/scores.json`: per-task scores;
+- `benchmark_results/<experiment>/tables/`: mean ± std tables (CSV, LaTeX, JSON).
+
+## Evaluation
+
+`evaluation/eval_lm_harness.py` runs GSM8K, GSM-Plus, MATH (minerva_math,
+`math_verify`), MBPP, SciQ, MMLU-STEM, MMLU-Pro-Math and BBH-COT with vLLM, one
+GPU per task. `--tasks hendrycks_math` runs Hendrycks MATH instead, and
+`evaluation/score_hendrycks_math.py` regrades its samples with `\boxed{}`
+exact match and `math_verify`, since lm-eval's own `exact_match` does not
+extract the final answer of a worked chat solution.

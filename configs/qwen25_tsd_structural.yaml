@@ -1,5 +1,5 @@
 # Standalone Qwen2.5 hidden-state distillation experiment.
-# Run with: bash scripts/run_qwen25_tsd_structural.sh all
+# Run with: bash scripts/run_experiment.sh all
 
 experiment:
   name: qwen25_tsd_structural
@@ -15,7 +15,6 @@ data:
   repo_id: Minsang/TSD-KD-Qwen2.5-1.5B-Instruct-Gen
   revision: 450c33f2d591f68e12ecb546c16cf79821ef0006
   filename: Qwen2.5-1.5B-Instruct_train_all.jsonl
-  split: train
   expected_examples: 79751
   sha256: c9b0a1cef6025334a9f947dc20d591b79baf88d6a1c19f2ac7a684d8330862bb
   raw_dir: data/tsd_kd_qwen25/raw
@@ -24,8 +23,8 @@ data:
   processed_dir: processed_data/tsd_kd_qwen25/Qwen/Qwen2.5-1.5B-Instruct
   contract_file: processed_data/tsd_kd_qwen25/Qwen/Qwen2.5-1.5B-Instruct/dataset_contract.json
   preprocess_workers: 32
-  # Used only for the trainer's in-run sanity evaluation. The final reported
-  # evaluation is the separate eight-benchmark suite below.
+  # Used only for the trainer's in-run dev loss. The reported evaluation is
+  # evaluation/eval_lm_harness.py's eight-task suite.
   dev_examples: 200
 
 resources:
@@ -43,7 +42,6 @@ training:
     - direct_spectrum
   epochs: 2
   learning_rate: 5.0e-6
-  min_learning_rate: 0.0
   micro_batch_size: 1
   gradient_accumulation_steps: 10
   weight_decay: 1.0e-2
@@ -53,43 +51,35 @@ training:
   max_length: 1024
   max_prompt_length: 512
   output_kd:
-    enabled: true
     type: sfkl
     ratio: 1.0
     skew_alpha: 0.1
-    student_generation: false
   auxiliary:
-    hidden_mse: 1.0
-    gram: 1.0
-    cka: 1.0
-    normalized_spectrum: 1.0
-    direct_spectrum: 1.0
-    cst: 0.003
+    # Auxiliary-loss weight of each method; output KD is the same for all.
+    weights:
+      hidden_mse: 1.0
+      gram: 1.0
+      cka: 1.0
+      normalized_spectrum: 1.0
+      direct_spectrum: 1.0
+      cst: 0.003
     warmup_steps: 100
     ramp_steps: 200
+    # Response tokens and matched layers (relative depth) of every auxiliary loss.
     max_tokens: 64
     num_layers: 4
     layer_min: 0.20
     layer_max: 0.85
-    gamma_min: 1.0e-2
-    gamma_max: 1.0e2
-    num_gamma_samples: 2
-    gamma_sampling: log_uniform
-    distance: l2
+    cst:
+      gamma_min: 1.0e-2
+      gamma_max: 1.0e2
+      num_gamma_samples: 2
+      distance: l2
 
 evaluation:
-  tasks:
-    - gsm8k
-    - gsm_plus
-    - minerva_math
-    - mbpp
-    - sciq
-    - mmlu_stem
-    - mmlu_pro_math
-    - bbh_cot_fewshot
   include_teacher: true
   include_base_student: true
-  evaluator_python: baselines/vendor/lm-evaluation-harness/.venv/bin/python
+  evaluator_python: evaluation/vendor/lm-evaluation-harness/.venv/bin/python
   max_new_tokens: 5120
   gpu_memory_utilization: 0.85
 

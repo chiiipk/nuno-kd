@@ -1,32 +1,19 @@
 [project]
-name = "amid"
+name = "nuno-kd"
 version = "0.1.0"
-description = "Add your description here"
-readme = "readme.md"
+description = "LLM knowledge distillation: output-level KD plus hidden-state structural losses."
+readme = "README.md"
 requires-python = "==3.10.*"
 
-
+# Training environment. The evaluator (lm-eval-harness + vLLM) lives in its own
+# venv; see evaluation/setup.sh.
 dependencies = [
-    "datasets",
-    "peft==0.18.1",
-    "transformers==4.57.3",
-    "trl==0.21.0",
-    "typer>=0.15.2",
-    "wandb",
-    "yq>=3.4.3",
+    "accelerate",
     "deepspeed",
-    "nltk",
-    "numerize",
+    "numpy",
+    "pyyaml",
     "torch==2.10.0",
-    "rouge-score",
-    "rich",
-    "setuptools",
-    "vllm==0.17.1",
-    "lm-eval[math,ifeval]==0.4.12",
-    "langdetect",
-    "immutabledict",
-    "celery",
-    "matplotlib"
+    "transformers==4.57.3",
 ]
 
 [tool.uv]
